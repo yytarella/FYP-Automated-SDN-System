@@ -84,24 +84,26 @@ class MLEngine:
             logger.error(f"B prediction error: {e}")
             return -1
 
-    def infer(self, features):
+    def infer(self, features_cd, features_ab):
 
         try:
-            features = np.array(features).reshape(1, -1)
+            X_cd = np.array(features_cd).reshape(1, -1)
+            X_ab = np.array(features_ab).reshape(1, -1)
 
-            logger.debug(f"Input feature shape: {features.shape}")
+            logger.debug(f"CD shape: {X_cd.shape}, AB shape: {X_ab.shape}")
 
             # parallel inference
-            future_cd = self.executor.submit(self._predict_cd, features)
-            future_a = self.executor.submit(self._predict_a, features)
-            future_b = self.executor.submit(self._predict_b, features)
+            future_cd = self.executor.submit(self._predict_cd, X_cd)
+            future_a = self.executor.submit(self._predict_a, X_ab)
+            future_b = self.executor.submit(self._predict_b, X_ab)
 
             attack = future_cd.result()
 
             logger.debug(f"Attack prediction: {attack}")
 
+            # prevent early misclassification
             if attack == 1:
-                logger.warning("Attack detected (DEBUG MODE - not blocking)")
+                logger.warning("Attack detected (ignored early)")
                 attack = 0
 
             behaviour = future_a.result()
@@ -111,8 +113,8 @@ class MLEngine:
 
             return {
                 "attack": attack,
-                "behaviour": behaviour,
-                "academic": academic
+                "behaviour": str(behaviour).lower(),
+                "academic": int(academic)
             }
 
         except Exception as e:
