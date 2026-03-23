@@ -55,7 +55,7 @@ class CaptureEngine:
 
         duration = times[-1] - times[0]
         if duration <= 0:
-            return [0, 0, 0, 0]
+            return [0, 0, 0, 0], [0, 0, 0, 0]
 
         bps = sum(lengths) / duration
         pps = len(lengths) / duration
@@ -114,7 +114,6 @@ class CaptureEngine:
             *stats["reverse_pps"]
         ]
 
-        # 🔥 FIX: pad to 43 features
         if len(features) < 43:
             features.extend([0] * (43 - len(features)))
 
@@ -151,9 +150,16 @@ class CaptureEngine:
                 flow["rev"].append((p["time"], p["length"]))
 
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
+            duration = flow["last_seen"] - flow["start"]
 
-            # 🔥 控制触发频率（避免刷屏）
-            if total_pkts >= self.min_packets and total_pkts % self.min_packets == 0:
+            # warm-up condition
+            if total_pkts < 30:
+                continue
+
+            if duration < 1.0:
+                continue
+
+            if total_pkts % self.min_packets == 0:
 
                 stats = self.build_stats(flow)
 
@@ -166,7 +172,6 @@ class CaptureEngine:
 
                 callback(features_1cd, features_1ab, metadata)
 
-                # 🔥 不删除 flow（关键！）
                 flow["fwd"].clear()
                 flow["rev"].clear()
                 flow["start"] = p["time"]
