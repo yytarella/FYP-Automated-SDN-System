@@ -1,64 +1,84 @@
+import joblib
+import numpy as np
 import logging
-from capture_engine import CaptureEngine
-from ml_engine import MLEngine
-from policy_engine import QoSPolicyEngine
+from concurrent.futures import ThreadPoolExecutor
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class QoSSystem:
+class MLEngine:
 
-    def __init__(self):
+    def __init__(self, model_dir="models"):
+        self.model_cd = joblib.load(f"{model_dir}/tier1cd_xgb_model.pkl")
+        self.model_a = joblib.load(f"{model_dir}/tier1a_behaviour_rf_model.pkl")
+        self.model_b = joblib.load(f"{model_dir}/tier1b_academic_rf_model.pkl")
 
-        self.capture_engine = CaptureEngine()
-        self.ml_engine = MLEngine()
-        self.policy_engine = QoSPolicyEngine()
+        self.model_cd = self._extract_model(self.model_cd, "CD")
+        self.model_a = self._extract_model(self.model_a, "A")
+        self.model_b = self._extract_model(self.model_b, "B")
 
-    def process_flow(self, features_1cd, features_1ab, metadata):
+        self.expected_cd = getattr(self.model_cd, "n_features_in_", None)
+        self.expected_a = getattr(self.model_a, "n_features_in_", None)
+        self.expected_b = getattr(self.model_b, "n_features_in_", None)
+
+        self.executor = ThreadPoolExecutor(max_workers=3)
+
+        logger.info(f"Expected features → CD={self.expected_cd}, A={self.expected_a}, B={self.expected_b}")
+
+    def _extract_model(self, obj, name):
+        if isinstance(obj, dict):
+            for key in ["model", "classifier", "clf"]:
+                if key in obj:
+                    return obj[key]
+            return list(obj.values())[0]
+        return obj
+
+    def _align(self, features, expected):
+        if expected is None:
+            return features
+
+        if features.shape[1] < expected:
+            features = np.pad(features, ((0, 0), (0, expected - features.shape[1])), mode='constant')
+        elif features.shape[1] > expected:
+            features = features[:, :expected]
+
+        return features
+
+    def infer(self, features_cd, features_ab):
 
         try:
-            # 1. Attack detection (Tier1CD)
-            attack_pred = self.ml_engine.model_cd.predict([features_1cd])[0]
+            X_cd = np.array(features_cd).reshape(1, -1)
+            X_ab = np.array(features_ab).reshape(1, -1)
 
-            if attack_pred == 1:
-                logger.warning(f"[ATTACK BLOCKED] Source={metadata.get('source')}")
-                return
+            X_cd = self._align(X_cd, self.expected_cd)
+            X_ab = self._align(X_ab, self.expected_a)
 
-            # 2. Behaviour + Academic (Tier1A + 1B)
-            behaviour = self.ml_engine.model_a.predict([features_1ab])[0]
-            academic = self.ml_engine.model_b.predict([features_1ab])[0]
+            # Tier1CD first
+            attack = self.model_cd.predict(X_cd)[0]
 
-            ml_result = {
+            if attack == 1:
+                logger.warning("Attack detected")
+                return {
+                    "attack": 1,
+                    "behaviour": None,
+                    "academic": None
+                }
+
+            # Tier1A + Tier1B
+            behaviour = self.model_a.predict(X_ab)[0]
+            academic = self.model_b.predict(X_ab)[0]
+
+            return {
                 "attack": 0,
                 "behaviour": str(behaviour).lower(),
                 "academic": int(academic)
             }
 
-            # 3. Policy decision
-            decision = self.policy_engine.decide(ml_result)
-
-            # 4. Logging (user-friendly output)
-            logger.info(
-                f"[FLOW] {metadata.get('source', 'unknown')} | "
-                f"Behaviour={ml_result['behaviour']} | "
-                f"Academic={ml_result['academic']} | "
-                f"Priority={decision['priority']} | "
-                f"Score={decision['score']}"
-            )
-
         except Exception as e:
-            logger.error(f"Pipeline error: {e}")
+            logger.error(f"ML error: {e}")
 
-    # Run system
-    def run(self):
-
-        logger.info("Starting QoS ML System...")
-
-        self.capture_engine.capture(self.process_flow)
-
-# Entry point
-if __name__ == "__main__":
-
-    system = QoSSystem()
-    system.run()
+            return {
+                "attack": 0,
+                "behaviour": -1,
+                "academic": -1
+            }
