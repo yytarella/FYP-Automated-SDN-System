@@ -51,7 +51,7 @@ class CaptureEngine:
 
     def compute_rate(self, lengths, times):
         if len(times) < 2:
-            return [0, 0, 0, 0]
+            return [0, 0, 0, 0], [0, 0, 0, 0]
 
         duration = times[-1] - times[0]
         if duration <= 0:
