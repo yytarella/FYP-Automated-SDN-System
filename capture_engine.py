@@ -7,12 +7,11 @@ logger = logging.getLogger(__name__)
 
 class CaptureEngine:
 
-    def __init__(self, interface="WiFi", min_packets=10):
+    def __init__(self, interface="ens37", min_packets=20):
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
 
-    # Flow key bidirectional
     def canonical_key(self, p):
         a = (p["src"], p["sport"])
         b = (p["dst"], p["dport"])
@@ -22,7 +21,6 @@ class CaptureEngine:
         else:
             return (p["dst"], p["src"], p["dport"], p["sport"], p["proto"]), "rev"
 
-    # Packet Parsing
     def packet_to_dict(self, pkt):
         try:
             return {
@@ -38,7 +36,6 @@ class CaptureEngine:
         except:
             return None
 
-    # Basic Stats
     def compute_stats(self, arr):
         if len(arr) == 0:
             return [0, 0, 0, 0, 0, 0]
@@ -52,42 +49,32 @@ class CaptureEngine:
             np.percentile(arr, 75)
         ]
 
-    # Rate Stats (bps / pps)
-    def compute_rate_stats(self, lengths, times):
-
+    def compute_rate(self, lengths, times):
         if len(times) < 2:
-            return [0, 0, 0, 0], [0, 0, 0, 0]
+            return [0, 0, 0, 0]
 
         duration = times[-1] - times[0]
-
         if duration <= 0:
-            return [0, 0, 0, 0], [0, 0, 0, 0]
+            return [0, 0, 0, 0]
 
         bps = sum(lengths) / duration
         pps = len(lengths) / duration
 
-        # match training structure: max, mean, min, var
         return [bps, bps, bps, 0], [pps, pps, pps, 0]
 
-    # Build unified stats
-    def build_base_stats(self, flow):
+    def build_stats(self, flow):
 
-        f = flow["fwd"]
-        r = flow["rev"]
+        f_times = [x[0] for x in flow["fwd"]]
+        f_lens = [x[1] for x in flow["fwd"]]
 
-        f_times = [x[0] for x in f]
-        f_lens = [x[1] for x in f]
-
-        r_times = [x[0] for x in r]
-        r_lens = [x[1] for x in r]
-
-        duration = flow["last_seen"] - flow["start"]
+        r_times = [x[0] for x in flow["rev"]]
+        r_lens = [x[1] for x in flow["rev"]]
 
         f_iat = np.diff(f_times) if len(f_times) > 1 else []
         r_iat = np.diff(r_times) if len(r_times) > 1 else []
 
-        f_bps, f_pps = self.compute_rate_stats(f_lens, f_times)
-        r_bps, r_pps = self.compute_rate_stats(r_lens, r_times)
+        f_bps, f_pps = self.compute_rate(f_lens, f_times)
+        r_bps, r_pps = self.compute_rate(r_lens, r_times)
 
         return {
             "forward_pl": self.compute_stats(f_lens),
@@ -101,12 +88,10 @@ class CaptureEngine:
             "reverse_pps": r_pps,
 
             "packet_count": len(f_lens) + len(r_lens),
-            "flow_duration": duration
+            "flow_duration": flow["last_seen"] - flow["start"]
         }
 
-    # Feature builder for 1cd
     def build_features_1cd(self, stats):
-
         return [
             *stats["forward_pl"],
             *stats["forward_piat"],
@@ -116,10 +101,8 @@ class CaptureEngine:
             stats["flow_duration"]
         ]
 
-    # Feature builder for 1ab
     def build_features_1ab(self, stats):
-
-        return [
+        features = [
             *stats["forward_bps"],
             *stats["forward_piat"],
             *stats["forward_pl"],
@@ -131,17 +114,21 @@ class CaptureEngine:
             *stats["reverse_pps"]
         ]
 
-    # Main capture loop
+        # 🔥 FIX: pad to 43 features
+        if len(features) < 43:
+            features.extend([0] * (43 - len(features)))
+
+        return features
+
     def capture(self, callback):
 
         logger.info(f"Starting capture on {self.interface}")
-
         cap = pyshark.LiveCapture(interface=self.interface)
 
         for pkt in cap.sniff_continuously():
 
             p = self.packet_to_dict(pkt)
-            if p is None:
+            if not p:
                 continue
 
             key, direction = self.canonical_key(p)
@@ -165,9 +152,10 @@ class CaptureEngine:
 
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
 
-            if total_pkts >= self.min_packets:
+            # 🔥 控制触发频率（避免刷屏）
+            if total_pkts >= self.min_packets and total_pkts % self.min_packets == 0:
 
-                stats = self.build_base_stats(flow)
+                stats = self.build_stats(flow)
 
                 features_1cd = self.build_features_1cd(stats)
                 features_1ab = self.build_features_1ab(stats)
@@ -178,5 +166,7 @@ class CaptureEngine:
 
                 callback(features_1cd, features_1ab, metadata)
 
-                # clear flow
-                del self.flows[key]
+                # 🔥 不删除 flow（关键！）
+                flow["fwd"].clear()
+                flow["rev"].clear()
+                flow["start"] = p["time"]
