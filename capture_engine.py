@@ -23,13 +23,11 @@ class CaptureEngine:
 
     def packet_to_dict(self, pkt):
         try:
-            host = None  # do not default to unknown here
+            host = None
 
-            # HTTP host (rare due to HTTPS, but still valid)
             if hasattr(pkt, "http") and hasattr(pkt.http, "host"):
                 host = str(pkt.http.host)
 
-            # TLS SNI (main source for HTTPS)
             elif hasattr(pkt, "tls") and hasattr(pkt.tls, "handshake_extensions_server_name"):
                 host = str(pkt.tls.handshake_extensions_server_name)
 
@@ -64,11 +62,23 @@ class CaptureEngine:
             return [0, 0, 0, 0], [0, 0, 0, 0]
 
         duration = times[-1] - times[0]
-        if duration <= 0:
-            return [0, 0, 0, 0], [0, 0, 0, 0]
 
-        bps = sum(lengths) / duration
-        pps = len(lengths) / duration
+        # prevent explosion
+        if duration <= 0:
+            duration = 1e-6
+
+        # stabilize duration
+        duration = max(duration, 0.1)
+
+        total_bytes = sum(lengths)
+        total_packets = len(lengths)
+
+        bps = total_bytes / duration
+        pps = total_packets / duration
+
+        # clip extreme values (critical fix)
+        bps = min(bps, 1e6)
+        pps = min(pps, 1e4)
 
         return [bps, bps, bps, 0], [pps, pps, pps, 0]
 
@@ -124,6 +134,9 @@ class CaptureEngine:
             *stats["reverse_pps"]
         ]
 
+        # clip all features to avoid model distortion
+        features = [min(x, 1e5) for x in features]
+
         if len(features) < 43:
             features.extend([0] * (43 - len(features)))
 
@@ -148,13 +161,12 @@ class CaptureEngine:
                     "last_seen": p["time"],
                     "fwd": [],
                     "rev": [],
-                    "host": p.get("host")  # may be None initially
+                    "host": p.get("host")
                 }
 
             flow = self.flows[key]
             flow["last_seen"] = p["time"]
 
-            # update host dynamically
             if p.get("host") and flow.get("host") is None:
                 flow["host"] = p["host"]
 
