@@ -33,25 +33,50 @@ class MLEngine:
             return list(obj.values())[0]
         return obj
 
-    def _align(self, features, expected):
-        if expected is None:
-            return features
+    def _sanity_check(self, X, name):
+        """
+        Validate feature quality before inference
+        """
+        if np.isnan(X).any():
+            logger.error(f"{name} contains NaN")
+            return False
 
-        if features.shape[1] < expected:
-            features = np.pad(features, ((0, 0), (0, expected - features.shape[1])), mode='constant')
-        elif features.shape[1] > expected:
-            features = features[:, :expected]
+        if np.isinf(X).any():
+            logger.error(f"{name} contains Inf")
+            return False
 
-        return features
+        # check extreme values
+        if np.max(np.abs(X)) > 1e6:
+            logger.warning(f"{name} has extreme values: max={np.max(np.abs(X))}")
+
+        return True
 
     def infer(self, features_cd, features_ab):
 
         try:
-            X_cd = np.array(features_cd).reshape(1, -1)
-            X_ab = np.array(features_ab).reshape(1, -1)
+            X_cd = np.array(features_cd, dtype=float).reshape(1, -1)
+            X_ab = np.array(features_ab, dtype=float).reshape(1, -1)
 
-            X_cd = self._align(X_cd, self.expected_cd)
-            X_ab = self._align(X_ab, self.expected_a)
+            # shape check (no padding anymore)
+            if self.expected_cd and X_cd.shape[1] != self.expected_cd:
+                logger.error(f"CD feature mismatch: got {X_cd.shape[1]}, expected {self.expected_cd}")
+                return {"attack": 0, "behaviour": -1, "academic": -1}
+
+            if self.expected_a and X_ab.shape[1] != self.expected_a:
+                logger.error(f"AB feature mismatch: got {X_ab.shape[1]}, expected {self.expected_a}")
+                return {"attack": 0, "behaviour": -1, "academic": -1}
+
+            # sanity check (NEW)
+            if not self._sanity_check(X_cd, "CD"):
+                return {"attack": 0, "behaviour": -1, "academic": -1}
+
+            if not self._sanity_check(X_ab, "AB"):
+                return {"attack": 0, "behaviour": -1, "academic": -1}
+
+            # DEBUG (you NEED this now)
+            logger.info(f"[DEBUG] CD first5={X_cd[0][:5]}")
+            logger.info(f"[DEBUG] AB first5={X_ab[0][:5]}")
+            logger.info(f"[DEBUG] packet_count={X_cd[0][-2]}, duration={X_cd[0][-1]}")
 
             future_cd = self.executor.submit(self.model_cd.predict, X_cd)
             future_a = self.executor.submit(self.model_a.predict, X_ab)
@@ -59,7 +84,7 @@ class MLEngine:
 
             attack = future_cd.result()[0]
 
-            # stability gating
+            # stability gating (keep your logic)
             packet_count = X_cd[0][-2]
             duration = X_cd[0][-1]
 
@@ -75,7 +100,7 @@ class MLEngine:
             logger.info(f"[ML] attack={attack}, behaviour={behaviour}, academic={academic}")
 
             return {
-                "attack": attack,
+                "attack": int(attack),
                 "behaviour": str(behaviour).lower(),
                 "academic": int(academic)
             }

@@ -23,13 +23,15 @@ class CaptureEngine:
 
     def packet_to_dict(self, pkt):
         try:
-            host = "unknown"
+            host = None  # do not default to unknown here
 
+            # HTTP host (rare due to HTTPS, but still valid)
             if hasattr(pkt, "http") and hasattr(pkt.http, "host"):
-                host = pkt.http.host
+                host = str(pkt.http.host)
 
+            # TLS SNI (main source for HTTPS)
             elif hasattr(pkt, "tls") and hasattr(pkt.tls, "handshake_extensions_server_name"):
-                host = pkt.tls.handshake_extensions_server_name
+                host = str(pkt.tls.handshake_extensions_server_name)
 
             return {
                 "src": pkt.ip.src,
@@ -146,11 +148,15 @@ class CaptureEngine:
                     "last_seen": p["time"],
                     "fwd": [],
                     "rev": [],
-                    "host": p.get("host", "unknown")
+                    "host": p.get("host")  # may be None initially
                 }
 
             flow = self.flows[key]
             flow["last_seen"] = p["time"]
+
+            # update host dynamically
+            if p.get("host") and flow.get("host") is None:
+                flow["host"] = p["host"]
 
             if direction == "fwd":
                 flow["fwd"].append((p["time"], p["length"]))
@@ -160,7 +166,6 @@ class CaptureEngine:
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
             duration = flow["last_seen"] - flow["start"]
 
-            # warm-up condition
             if total_pkts < 30:
                 continue
 
@@ -175,7 +180,7 @@ class CaptureEngine:
                 features_1ab = self.build_features_1ab(stats)
 
                 metadata = {
-                    "source": flow.get("host", "unknown")
+                    "source": flow.get("host") or "unknown"
                 }
 
                 callback(features_1cd, features_1ab, metadata)
