@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 class CaptureEngine:
 
-    def __init__(self, interface="ens37", min_packets=20):
+    def __init__(self, interface="ens37", min_packets=50):
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
@@ -43,7 +43,7 @@ class CaptureEngine:
             }
         except:
             return None
-        
+
     def compute_stats(self, arr):
         if len(arr) == 0:
             return [0, 0, 0, 0, 0, 0]
@@ -61,24 +61,10 @@ class CaptureEngine:
         if len(times) < 2:
             return [0, 0, 0, 0], [0, 0, 0, 0]
 
-        duration = times[-1] - times[0]
+        duration = max(times[-1] - times[0], 0.1)
 
-        # prevent explosion
-        if duration <= 0:
-            duration = 1e-6
-
-        # stabilize duration
-        duration = max(duration, 0.1)
-
-        total_bytes = sum(lengths)
-        total_packets = len(lengths)
-
-        bps = total_bytes / duration
-        pps = total_packets / duration
-
-        # clip extreme values (critical fix)
-        bps = min(bps, 1e6)
-        pps = min(pps, 1e4)
+        bps = sum(lengths) / duration
+        pps = len(lengths) / duration
 
         return [bps, bps, bps, 0], [pps, pps, pps, 0]
 
@@ -101,12 +87,10 @@ class CaptureEngine:
             "forward_piat": self.compute_stats(f_iat),
             "reverse_pl": self.compute_stats(r_lens),
             "reverse_piat": self.compute_stats(r_iat),
-
             "forward_bps": f_bps,
             "forward_pps": f_pps,
             "reverse_bps": r_bps,
             "reverse_pps": r_pps,
-
             "packet_count": len(f_lens) + len(r_lens),
             "flow_duration": flow["last_seen"] - flow["start"]
         }
@@ -127,15 +111,11 @@ class CaptureEngine:
             *stats["forward_piat"],
             *stats["forward_pl"],
             *stats["forward_pps"],
-
             *stats["reverse_bps"],
             *stats["reverse_piat"],
             *stats["reverse_pl"],
             *stats["reverse_pps"]
         ]
-
-        # clip all features to avoid model distortion
-        features = [min(x, 1e5) for x in features]
 
         if len(features) < 43:
             features.extend([0] * (43 - len(features)))
@@ -144,7 +124,6 @@ class CaptureEngine:
 
     def capture(self, callback):
 
-        logger.info(f"Starting capture on {self.interface}")
         cap = pyshark.LiveCapture(interface=self.interface)
 
         for pkt in cap.sniff_continuously():
@@ -161,10 +140,15 @@ class CaptureEngine:
                     "last_seen": p["time"],
                     "fwd": [],
                     "rev": [],
-                    "host": p.get("host")
+                    "host": p.get("host"),
+                    "processed": False
                 }
 
             flow = self.flows[key]
+
+            if flow["processed"]:
+                continue
+
             flow["last_seen"] = p["time"]
 
             if p.get("host") and flow.get("host") is None:
@@ -178,25 +162,18 @@ class CaptureEngine:
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
             duration = flow["last_seen"] - flow["start"]
 
-            if total_pkts < 30:
+            if total_pkts < 50 or duration < 5.0:
                 continue
 
-            if duration < 1.0:
-                continue
+            stats = self.build_stats(flow)
 
-            if total_pkts % self.min_packets == 0:
+            features_1cd = self.build_features_1cd(stats)
+            features_1ab = self.build_features_1ab(stats)
 
-                stats = self.build_stats(flow)
+            metadata = {
+                "source": flow.get("host") or "unknown"
+            }
 
-                features_1cd = self.build_features_1cd(stats)
-                features_1ab = self.build_features_1ab(stats)
+            callback(features_1cd, features_1ab, metadata)
 
-                metadata = {
-                    "source": flow.get("host") or "unknown"
-                }
-
-                callback(features_1cd, features_1ab, metadata)
-
-                flow["fwd"].clear()
-                flow["rev"].clear()
-                flow["start"] = p["time"]
+            flow["processed"] = True

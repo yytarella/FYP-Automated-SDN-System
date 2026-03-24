@@ -1,9 +1,15 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class QoSPolicyEngine:
 
     def __init__(self):
+
         self.weights = {
-            "academic": 2,
-            "interactive": 2,
+            "academic": 4,      
+            "interactive": 1,
             "background": -2,
             "bulk": -2,
             "media": -3
@@ -12,6 +18,10 @@ class QoSPolicyEngine:
     def compute_score(self, behaviour, academic):
 
         score = 0
+
+        if academic == 1:
+            score += self.weights["academic"]
+
         label = behaviour.lower() if behaviour else ""
 
         if "chat" in label or "interactive" in label:
@@ -20,14 +30,11 @@ class QoSPolicyEngine:
         if "background" in label:
             score += self.weights["background"]
 
-        if "bulk" in label or "file" in label:
+        if "bulk" in label:
             score += self.weights["bulk"]
 
-        if "media" in label or "video" in label or "stream" in label:
+        if "media" in label or "stream" in label:
             score += self.weights["media"]
-
-        if academic == 1:
-            score += self.weights["academic"]
 
         return score
 
@@ -37,8 +44,7 @@ class QoSPolicyEngine:
             return {
                 "action": "BLOCK",
                 "priority": "CRITICAL",
-                "bandwidth": 0,
-                "reason": "ATTACK"
+                "bandwidth": 0
             }
 
         score = self.compute_score(
@@ -48,18 +54,13 @@ class QoSPolicyEngine:
 
         if score >= 4:
             priority = "HIGH"
-            bandwidth = "UNLIMITED"
         elif score >= 2:
             priority = "MEDIUM"
-            bandwidth = "MODERATE"
         else:
             priority = "LOW"
-            bandwidth = "LIMITED"
 
         return {
             "action": "ALLOW",
             "priority": priority,
-            "bandwidth": bandwidth,
-            "score": score,
-            "reason": "ML_ONLY_POLICY"
+            "score": score
         }
