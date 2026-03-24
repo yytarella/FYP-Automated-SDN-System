@@ -1,7 +1,11 @@
 import joblib
 import numpy as np
+import pandas as pd
 import logging
+import warnings
 from concurrent.futures import ThreadPoolExecutor
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -9,98 +13,98 @@ logger = logging.getLogger(__name__)
 class MLEngine:
 
     def __init__(self, model_dir="models"):
-        self.model_cd = joblib.load(f"{model_dir}/tier1cd_xgb_model.pkl")
-        self.model_a = joblib.load(f"{model_dir}/tier1a_behaviour_rf_model.pkl")
-        self.model_b = joblib.load(f"{model_dir}/tier1b_academic_rf_model.pkl")
 
-        self.model_cd = self._extract_model(self.model_cd)
-        self.model_a = self._extract_model(self.model_a)
-        self.model_b = self._extract_model(self.model_b)
+        self.bundle_cd = joblib.load(f"{model_dir}/tier1cd_xgb_model.pkl")
+        self.bundle_a = joblib.load(f"{model_dir}/tier1a_behaviour_rf_model.pkl")
+        self.bundle_b = joblib.load(f"{model_dir}/tier1b_academic_rf_model.pkl")
 
-        self.expected_cd = getattr(self.model_cd, "n_features_in_", None)
-        self.expected_a = getattr(self.model_a, "n_features_in_", None)
-        self.expected_b = getattr(self.model_b, "n_features_in_", None)
+        self.model_cd = self._extract_model(self.bundle_cd)
+        self.model_a = self._extract_model(self.bundle_a)
+        self.model_b = self._extract_model(self.bundle_b)
+
+        # get feature names
+        self.features_a = self.bundle_a.get("features", None)
+        self.features_b = self.bundle_b.get("features", None)
 
         self.executor = ThreadPoolExecutor(max_workers=3)
 
-        logger.info(f"Expected features CD={self.expected_cd}, A={self.expected_a}, B={self.expected_b}")
+        logger.info("ML Engine initialized with feature alignment")
 
     def _extract_model(self, obj):
         if isinstance(obj, dict):
-            for key in ["model", "classifier", "clf"]:
-                if key in obj:
-                    return obj[key]
-            return list(obj.values())[0]
+            return obj.get("model", list(obj.values())[0])
         return obj
 
-    def _sanity_check(self, X, name):
+    def _build_dataframe_ab(self, raw_features):
         """
-        Validate feature quality before inference
+        Convert raw feature list into DataFrame aligned with training features
         """
-        if np.isnan(X).any():
-            logger.error(f"{name} contains NaN")
-            return False
 
-        if np.isinf(X).any():
-            logger.error(f"{name} contains Inf")
-            return False
+        data = {}
 
-        # check extreme values
-        if np.max(np.abs(X)) > 1e6:
-            logger.warning(f"{name} has extreme values: max={np.max(np.abs(X))}")
+        # base features (you MUST map correctly)
+        base = {
+            "forward_pl_mean": raw_features[0],
+            "forward_pl_var": raw_features[1],
+            "forward_pl_min": raw_features[2],
+            "forward_pl_max": raw_features[3],
+            "forward_pl_q1": raw_features[4],
+            "forward_pl_q3": raw_features[5],
+        }
 
-        return True
+        data.update(base)
+
+        # fill missing features as 0
+        for col in self.features_a:
+            if col not in data:
+                data[col] = 0
+
+        df = pd.DataFrame([data])
+
+        # create ratio features (same as training)
+        def safe_ratio(a, b):
+            return 0 if b == 0 else a / b
+
+        if "pl_mean_ratio" in df.columns:
+            df["pl_mean_ratio"] = safe_ratio(
+                df.get("forward_pl_mean", 0),
+                df.get("reverse_pl_mean", 1)
+            )
+
+        if "iat_ratio" in df.columns:
+            df["iat_ratio"] = safe_ratio(
+                df.get("forward_piat_mean", 0),
+                df.get("reverse_piat_mean", 1)
+            )
+
+        if "pps_ratio" in df.columns:
+            df["pps_ratio"] = safe_ratio(
+                df.get("forward_pps_mean", 0),
+                df.get("reverse_pps_mean", 1)
+            )
+
+        return df[self.features_a]
 
     def infer(self, features_cd, features_ab):
 
         try:
-            X_cd = np.array(features_cd, dtype=float).reshape(1, -1)
-            X_ab = np.array(features_ab, dtype=float).reshape(1, -1)
+            X_cd = np.array(features_cd).reshape(1, -1)
 
-            # shape check (no padding anymore)
-            if self.expected_cd and X_cd.shape[1] != self.expected_cd:
-                logger.error(f"CD feature mismatch: got {X_cd.shape[1]}, expected {self.expected_cd}")
-                return {"attack": 0, "behaviour": -1, "academic": -1}
-
-            if self.expected_a and X_ab.shape[1] != self.expected_a:
-                logger.error(f"AB feature mismatch: got {X_ab.shape[1]}, expected {self.expected_a}")
-                return {"attack": 0, "behaviour": -1, "academic": -1}
-
-            # sanity check (NEW)
-            if not self._sanity_check(X_cd, "CD"):
-                return {"attack": 0, "behaviour": -1, "academic": -1}
-
-            if not self._sanity_check(X_ab, "AB"):
-                return {"attack": 0, "behaviour": -1, "academic": -1}
-
-            # DEBUG (you NEED this now)
-            logger.info(f"[DEBUG] CD first5={X_cd[0][:5]}")
-            logger.info(f"[DEBUG] AB first5={X_ab[0][:5]}")
-            logger.info(f"[DEBUG] packet_count={X_cd[0][-2]}, duration={X_cd[0][-1]}")
+            # convert AB features properly
+            X_ab_df = self._build_dataframe_ab(features_ab)
 
             future_cd = self.executor.submit(self.model_cd.predict, X_cd)
-            future_a = self.executor.submit(self.model_a.predict, X_ab)
-            future_b = self.executor.submit(self.model_b.predict, X_ab)
+            future_a = self.executor.submit(self.model_a.predict, X_ab_df)
+            future_b = self.executor.submit(self.model_b.predict, X_ab_df)
 
-            attack = future_cd.result()[0]
-
-            # stability gating (keep your logic)
-            packet_count = X_cd[0][-2]
-            duration = X_cd[0][-1]
-
-            if attack == 1:
-                if packet_count < 30 or duration < 1.0:
-                    attack = 0
-                else:
-                    logger.warning("Attack confirmed")
-
+            attack = int(future_cd.result()[0])
             behaviour = future_a.result()[0]
             academic = future_b.result()[0]
 
             logger.info(f"[ML] attack={attack}, behaviour={behaviour}, academic={academic}")
 
             return {
-                "attack": int(attack),
+                "attack": attack,
                 "behaviour": str(behaviour).lower(),
                 "academic": int(academic)
             }
