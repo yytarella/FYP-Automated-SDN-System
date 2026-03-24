@@ -23,6 +23,14 @@ class CaptureEngine:
 
     def packet_to_dict(self, pkt):
         try:
+            host = "unknown"
+
+            if hasattr(pkt, "http") and hasattr(pkt.http, "host"):
+                host = pkt.http.host
+
+            elif hasattr(pkt, "tls") and hasattr(pkt.tls, "handshake_extensions_server_name"):
+                host = pkt.tls.handshake_extensions_server_name
+
             return {
                 "src": pkt.ip.src,
                 "dst": pkt.ip.dst,
@@ -31,11 +39,11 @@ class CaptureEngine:
                 "length": int(pkt.length),
                 "time": float(pkt.sniff_timestamp),
                 "proto": pkt.transport_layer,
-                "host": getattr(pkt, "host", "unknown")
+                "host": host
             }
         except:
             return None
-
+        
     def compute_stats(self, arr):
         if len(arr) == 0:
             return [0, 0, 0, 0, 0, 0]

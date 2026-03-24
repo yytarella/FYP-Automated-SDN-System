@@ -7,6 +7,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def map_behaviour(label):
+    mapping = {
+        "0": "chat",
+        "1": "media",
+        "2": "bulk",
+        "3": "interactive",
+        "4": "background",
+        "5": "stream"
+    }
+    return mapping.get(str(label), "unknown")
+
+
 class QoSSystem:
 
     def __init__(self):
@@ -23,11 +35,17 @@ class QoSSystem:
                 logger.warning(f"[ATTACK BLOCKED] Source={metadata.get('source')}")
                 return
 
-            decision = self.policy_engine.decide(ml_result)
+            behaviour_label = map_behaviour(ml_result["behaviour"])
+
+            decision = self.policy_engine.decide({
+                "attack": ml_result["attack"],
+                "behaviour": behaviour_label,
+                "academic": ml_result["academic"]
+            })
 
             logger.info(
                 f"[FLOW] {metadata.get('source', 'unknown')} | "
-                f"Behaviour={ml_result['behaviour']} | "
+                f"Behaviour={behaviour_label} | "
                 f"Academic={ml_result['academic']} | "
                 f"Priority={decision['priority']} | "
                 f"Score={decision['score']}"
