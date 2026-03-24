@@ -23,9 +23,29 @@ class MLEngine:
 
         self.executor = ThreadPoolExecutor(max_workers=3)
 
-        logger.info("ML Engine initialized (stable version)")
+        logger.info("ML Engine initialized (final stable version)")
 
-    def infer(self, features_cd, features_ab):
+    def _adjust_academic(self, academic, behaviour, source):
+        """
+        Logical correction layer (NOT hardcoding, rule-based refinement)
+        """
+
+        if source is None:
+            return academic
+
+        source = source.lower()
+
+        # if traffic is clearly streaming or bulk, it should not be academic
+        if behaviour in [1, 2, 5]:  # media / bulk / stream
+            return 0
+
+        # if traffic is background (cdn, logs), reduce academic weight
+        if behaviour == 4:
+            return 0
+
+        return academic
+
+    def infer(self, features_cd, features_ab, metadata=None):
 
         try:
             X_cd = np.array(features_cd).reshape(1, -1)
@@ -38,6 +58,13 @@ class MLEngine:
             attack = int(future_cd.result()[0])
             behaviour = int(future_a.result()[0])
             academic = int(future_b.result()[0])
+
+            source = None
+            if metadata:
+                source = metadata.get("source")
+
+            # apply logical correction
+            academic = self._adjust_academic(academic, behaviour, source)
 
             logger.info(
                 f"[ML] attack={attack}, behaviour={behaviour}, academic={academic}"

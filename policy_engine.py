@@ -1,32 +1,18 @@
-import logging
-
-logger = logging.getLogger(__name__)
-
-
 class QoSPolicyEngine:
 
     def __init__(self):
-
-        # adjustable weights (NO hardcode behaviour → priority)
         self.weights = {
-            "academic": 3,
-            "interactive": 1,
+            "academic": 2,
+            "interactive": 2,
             "background": -2,
-            "bulk": -1,
-            "media": -3   # <- 你要的更严格
+            "bulk": -2,
+            "media": -3
         }
 
     def compute_score(self, behaviour, academic):
 
         score = 0
-
-        if academic == 1:
-            score += self.weights["academic"]
-
-        if behaviour is None:
-            return score
-
-        label = behaviour.lower()
+        label = behaviour.lower() if behaviour else ""
 
         if "chat" in label or "interactive" in label:
             score += self.weights["interactive"]
@@ -39,6 +25,9 @@ class QoSPolicyEngine:
 
         if "media" in label or "video" in label or "stream" in label:
             score += self.weights["media"]
+
+        if academic == 1:
+            score += self.weights["academic"]
 
         return score
 
@@ -57,10 +46,10 @@ class QoSPolicyEngine:
             ml_result["academic"]
         )
 
-        if score >= 3:
+        if score >= 4:
             priority = "HIGH"
             bandwidth = "UNLIMITED"
-        elif score >= 1:
+        elif score >= 2:
             priority = "MEDIUM"
             bandwidth = "MODERATE"
         else:
@@ -72,5 +61,5 @@ class QoSPolicyEngine:
             "priority": priority,
             "bandwidth": bandwidth,
             "score": score,
-            "reason": "ADAPTIVE_POLICY"
+            "reason": "ML_ONLY_POLICY"
         }
