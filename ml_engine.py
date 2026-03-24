@@ -1,5 +1,6 @@
 import joblib
 import numpy as np
+import pandas as pd
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,26 +19,48 @@ class MLEngine:
         self.model_a = bundle_a["model"]
         self.model_b = bundle_b["model"]
 
+        self.feature_names = bundle_a["features"]
+
         self.executor = ThreadPoolExecutor(max_workers=3)
+
+        logger.info(f"Expected feature count: {len(self.feature_names)}")
 
     def infer(self, features_cd, features_ab):
 
-        X_cd = np.array(features_cd).reshape(1, -1)
-        X_ab = np.array(features_ab).reshape(1, -1)
+        try:
+            if len(features_ab) != len(self.feature_names):
+                logger.error(
+                    f"Feature length mismatch: got {len(features_ab)}, expected {len(self.feature_names)}"
+                )
+                return {
+                    "attack": 0,
+                    "behaviour": -1,
+                    "academic": -1
+                }
 
-        attack = int(self.model_cd.predict(X_cd)[0])
-        behaviour = int(self.model_a.predict(X_ab)[0])
-        academic = int(self.model_b.predict(X_ab)[0])
+            X_cd = np.array(features_cd).reshape(1, -1)
 
-        # stability filter（关键）
-        packet_count = X_cd[0][-2]
-        duration = X_cd[0][-1]
+            X_ab = pd.DataFrame([features_ab], columns=self.feature_names)
 
-        if attack == 1 and (packet_count < 100 or duration < 5.0):
-            attack = 0
+            attack = int(self.model_cd.predict(X_cd)[0])
+            behaviour = int(self.model_a.predict(X_ab)[0])
+            academic = int(self.model_b.predict(X_ab)[0])
 
-        return {
-            "attack": attack,
-            "behaviour": behaviour,
-            "academic": academic
-        }
+            logger.info(
+                f"[ML] attack={attack}, behaviour={behaviour}, academic={academic}"
+            )
+
+            return {
+                "attack": attack,
+                "behaviour": behaviour,
+                "academic": academic
+            }
+
+        except Exception as e:
+            logger.error(f"ML error: {e}")
+
+            return {
+                "attack": 0,
+                "behaviour": -1,
+                "academic": -1
+            }
