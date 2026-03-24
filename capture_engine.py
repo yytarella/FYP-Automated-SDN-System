@@ -46,27 +46,43 @@ class CaptureEngine:
 
     def compute_stats(self, arr):
         if len(arr) == 0:
-            return [0, 0, 0, 0, 0, 0]
+            return {
+                "mean": 0, "var": 0, "min": 0, "max": 0,
+                "q1": 0, "q3": 0
+            }
 
-        return [
-            np.mean(arr),
-            np.var(arr) if len(arr) > 1 else 0,
-            np.min(arr),
-            np.max(arr),
-            np.percentile(arr, 25),
-            np.percentile(arr, 75)
-        ]
+        return {
+            "mean": np.mean(arr),
+            "var": np.var(arr) if len(arr) > 1 else 0,
+            "min": np.min(arr),
+            "max": np.max(arr),
+            "q1": np.percentile(arr, 25),
+            "q3": np.percentile(arr, 75)
+        }
 
     def compute_rate(self, lengths, times):
         if len(times) < 2:
-            return [0, 0, 0, 0], [0, 0, 0, 0]
+            return {"mean": 0, "var": 0, "min": 0, "max": 0}
 
         duration = max(times[-1] - times[0], 0.1)
 
-        bps = sum(lengths) / duration
-        pps = len(lengths) / duration
+        bps_series = [l / duration for l in lengths]
+        pps_series = [1 / duration for _ in lengths]
 
-        return [bps, bps, bps, 0], [pps, pps, pps, 0]
+        return {
+            "bps": {
+                "mean": np.mean(bps_series),
+                "var": np.var(bps_series),
+                "min": np.min(bps_series),
+                "max": np.max(bps_series)
+            },
+            "pps": {
+                "mean": np.mean(pps_series),
+                "var": np.var(pps_series),
+                "min": np.min(pps_series),
+                "max": np.max(pps_series)
+            }
+        }
 
     def build_stats(self, flow):
 
@@ -79,48 +95,109 @@ class CaptureEngine:
         f_iat = np.diff(f_times) if len(f_times) > 1 else []
         r_iat = np.diff(r_times) if len(r_times) > 1 else []
 
-        f_bps, f_pps = self.compute_rate(f_lens, f_times)
-        r_bps, r_pps = self.compute_rate(r_lens, r_times)
-
         return {
-            "forward_pl": self.compute_stats(f_lens),
-            "forward_piat": self.compute_stats(f_iat),
-            "reverse_pl": self.compute_stats(r_lens),
-            "reverse_piat": self.compute_stats(r_iat),
-            "forward_bps": f_bps,
-            "forward_pps": f_pps,
-            "reverse_bps": r_bps,
-            "reverse_pps": r_pps,
+            "f_pl": self.compute_stats(f_lens),
+            "f_piat": self.compute_stats(f_iat),
+            "r_pl": self.compute_stats(r_lens),
+            "r_piat": self.compute_stats(r_iat),
+            "f_rate": self.compute_rate(f_lens, f_times),
+            "r_rate": self.compute_rate(r_lens, r_times),
             "packet_count": len(f_lens) + len(r_lens),
             "flow_duration": flow["last_seen"] - flow["start"]
         }
 
-    def build_features_1cd(self, stats):
+    # =========================
+    # EXACT MATCH: TIER1CD
+    # =========================
+    def build_features_1cd(self, s):
+
         return [
-            *stats["forward_pl"],
-            *stats["forward_piat"],
-            *stats["reverse_pl"],
-            *stats["reverse_piat"],
-            stats["packet_count"],
-            stats["flow_duration"]
+            s["f_pl"]["mean"],
+            s["f_pl"]["var"],
+            s["f_pl"]["min"],
+            s["f_pl"]["max"],
+            s["f_pl"]["q1"],
+            s["f_pl"]["q3"],
+
+            s["f_piat"]["mean"],
+            s["f_piat"]["var"],
+            s["f_piat"]["min"],
+            s["f_piat"]["max"],
+            s["f_piat"]["q1"],
+            s["f_piat"]["q3"],
+
+            s["r_pl"]["mean"],
+            s["r_pl"]["var"],
+            s["r_pl"]["min"],
+            s["r_pl"]["max"],
+            s["r_pl"]["q1"],
+            s["r_pl"]["q3"],
+
+            s["r_piat"]["mean"],
+            s["r_piat"]["var"],
+            s["r_piat"]["min"],
+            s["r_piat"]["max"],
+            s["r_piat"]["q1"],
+            s["r_piat"]["q3"],
+
+            s["packet_count"],
+            s["flow_duration"]
         ]
 
-    def build_features_1ab(self, stats):
-        features = [
-            *stats["forward_bps"],
-            *stats["forward_piat"],
-            *stats["forward_pl"],
-            *stats["forward_pps"],
-            *stats["reverse_bps"],
-            *stats["reverse_piat"],
-            *stats["reverse_pl"],
-            *stats["reverse_pps"]
+    # =========================
+    # EXACT MATCH: TIER1AB
+    # =========================
+    def build_features_1ab(self, s):
+
+        return [
+            s["f_rate"]["bps"]["max"],
+            s["f_rate"]["bps"]["mean"],
+            s["f_rate"]["bps"]["min"],
+            s["f_rate"]["bps"]["var"],
+
+            s["f_piat"]["max"],
+            s["f_piat"]["mean"],
+            s["f_piat"]["min"],
+            s["f_piat"]["q1"],
+            s["f_piat"]["q3"],
+            s["f_piat"]["var"],
+
+            s["f_pl"]["max"],
+            s["f_pl"]["mean"],
+            s["f_pl"]["min"],
+            s["f_pl"]["q1"],
+            s["f_pl"]["q3"],
+            s["f_pl"]["var"],
+
+            s["f_rate"]["pps"]["max"],
+            s["f_rate"]["pps"]["mean"],
+            s["f_rate"]["pps"]["min"],
+            s["f_rate"]["pps"]["var"],
+
+            s["r_rate"]["bps"]["max"],
+            s["r_rate"]["bps"]["mean"],
+            s["r_rate"]["bps"]["min"],
+            s["r_rate"]["bps"]["var"],
+
+            s["r_piat"]["max"],
+            s["r_piat"]["mean"],
+            s["r_piat"]["min"],
+            s["r_piat"]["q1"],
+            s["r_piat"]["q3"],
+            s["r_piat"]["var"],
+
+            s["r_pl"]["max"],
+            s["r_pl"]["mean"],
+            s["r_pl"]["min"],
+            s["r_pl"]["q1"],
+            s["r_pl"]["q3"],
+            s["r_pl"]["var"],
+
+            s["r_rate"]["pps"]["max"],
+            s["r_rate"]["pps"]["mean"],
+            s["r_rate"]["pps"]["min"],
+            s["r_rate"]["pps"]["var"]
         ]
-
-        if len(features) < 43:
-            features.extend([0] * (43 - len(features)))
-
-        return features
 
     def capture(self, callback):
 
@@ -162,7 +239,7 @@ class CaptureEngine:
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
             duration = flow["last_seen"] - flow["start"]
 
-            if total_pkts < 50 or duration < 5.0:
+            if total_pkts < self.min_packets or duration < 5.0:
                 continue
 
             stats = self.build_stats(flow)
