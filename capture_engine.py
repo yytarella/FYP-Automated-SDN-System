@@ -26,7 +26,7 @@ class CaptureEngine:
             'apu.edu.my', 'university', 'scopus'
         ]
         # Attack ports: known ports often used for exploits (including IRC, FTP, etc.)
-        self.attack_ports = {21, 22, 23, 25, 80, 443, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555}
+        self.attack_ports = {21, 22, 23, 25, 80, 443, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555, 8080, 8443}
         # Lock for thread-safe access to shared dictionaries
         self.lock = threading.Lock()
 

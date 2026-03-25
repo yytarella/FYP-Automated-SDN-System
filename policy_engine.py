@@ -29,8 +29,8 @@ class QoSPolicyEngine:
 
         # Known safe ports (common services)
         self.safe_ports = {80, 443, 53, 123, 993, 995, 22, 3389}
-        # Known attack ports (to block)
-        self.attack_ports = {21, 23, 445, 139, 135, 1433, 3306, 5432}
+        # Known attack ports (to block) - expanded
+        self.attack_ports = {21, 22, 23, 25, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555, 8080, 8443}
 
     def is_academic_domain(self, source):
         if not source or source == "unknown":
@@ -55,46 +55,6 @@ class QoSPolicyEngine:
         elif is_academic_flag and label == "unknown":
             score += self.weights["interactive"]
         return score
-
-    def _is_attack_likely_false_positive(self, ml_result, metadata):
-        """
-        Heuristics to determine if the attack flag is likely a false positive.
-        Returns True if we believe it's a false positive.
-        """
-        # 1. Packet count too low
-        packet_count = metadata.get("flow_packet_count", 0) if metadata else 0
-        if packet_count < 100:
-            logger.debug(f"Low packet count ({packet_count}) -> treat as FP")
-            return True
-
-        # 2. Confidence too low
-        confidence = ml_result.get("confidence", 0.0)
-        if confidence < 0.98:
-            logger.debug(f"Low confidence ({confidence}) -> treat as FP")
-            return True
-
-        # 3. Destination port is safe
-        dst_port = metadata.get("dst_port", 0) if metadata else 0
-        if dst_port in self.safe_ports:
-            logger.debug(f"Safe port {dst_port} -> treat as FP")
-            return True
-
-        # 4. Domain is likely safe (CDN, cloud, static)
-        source = metadata.get("source", "") if metadata else ""
-        if source:
-            source_lower = source.lower()
-            if any(kw in source_lower for kw in ['cdn', 'cloud', 'static', 'akamai', 'fastly']):
-                logger.debug(f"CDN/cloud domain {source} -> treat as FP")
-                return True
-
-        # 5. Behaviour classification says normal (chat, media, interactive)
-        behaviour = ml_result.get("behaviour", "").lower()
-        if behaviour in ["chat", "media", "interactive"]:
-            logger.debug(f"Normal behaviour {behaviour} -> treat as FP")
-            return True
-
-        # 6. Default: not a false positive
-        return False
 
     def decide(self, ml_result, source=None, metadata=None):
         # Extract context
@@ -133,31 +93,27 @@ class QoSPolicyEngine:
             }
 
         # ---- 3. ACADEMIC IDENTIFICATION FOR NON-SAFE DOMAINS ----
-        is_edu_domain = self.is_academic_domain(final_source)
-        is_edu_ml = ml_result.get("academic", 0) == 1
-        final_academic_status = is_edu_domain or is_edu_ml
+        # For unknown sources, never trust ML academic result (avoid IP flows gaining priority)
+        if final_source == "unknown":
+            final_academic_status = False
+        else:
+            is_edu_domain = self.is_academic_domain(final_source)
+            is_edu_ml = ml_result.get("academic", 0) == 1
+            final_academic_status = is_edu_domain or is_edu_ml
 
-        # ---- 4. INTELLIGENT ATTACK HANDLING (with false positive reduction) ----
+        # ---- 4. ATTACK HANDLING (strict for non-safe domains) ----
         if is_attack == 1:
-            # Suppress if immature flow
-            if packet_count < 100:
-                logger.info(f"[POLICY] Attack suppressed (immature flow, {packet_count} pkts): {final_source}")
-                is_attack = 0
-            elif confidence < 0.99:
-                logger.info(f"[POLICY] Attack suppressed (low confidence {confidence}): {final_source}")
-                is_attack = 0
+            # Block only if high confidence and enough packets
+            if packet_count >= 100 and confidence >= 0.99:
+                logger.warning(f"[POLICY] Verified attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
+                return {
+                    "action": "BLOCK",
+                    "priority": "NONE",
+                    "reason": f"Verified Threat (Conf: {confidence:.3f})"
+                }
             else:
-                # Check for likely false positives
-                if self._is_attack_likely_false_positive(ml_result, metadata):
-                    logger.info(f"[POLICY] Attack flag overridden by false positive heuristics: {final_source}")
-                    is_attack = 0
-                else:
-                    # True positive block
-                    return {
-                        "action": "BLOCK",
-                        "priority": "NONE",
-                        "reason": f"Verified Threat (Conf: {confidence})"
-                    }
+                logger.info(f"[POLICY] Attack suppressed (immature/low confidence): {final_source}")
+                is_attack = 0  # continue to allow
 
         # ---- 5. QOS SCORING (if not blocked) ----
         behaviour = ml_result.get("behaviour", "unknown")

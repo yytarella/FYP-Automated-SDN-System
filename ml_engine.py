@@ -16,7 +16,7 @@ class MLEngine:
 
             self.model_a = bundle_a["model"]
             self.model_b = bundle_b["model"]
-            self.feature_names = bundle_a["features"]          # Expected features for behaviour/academic
+            self.feature_names = bundle_a["features"]
             self.label_encoder_a = bundle_a.get("label_encoder")
             self.label_encoder_b = bundle_b.get("label_encoder")
             self.feature_names_cd = self.model_cd.feature_names_in_
@@ -40,7 +40,7 @@ class MLEngine:
 
     def infer(self, features_cd_dict, features_ab_dict, metadata):
         try:
-            # Build CD vector in correct order
+            # Build CD vector
             X_cd = np.array([[features_cd_dict.get(name, 0) for name in self.feature_names_cd]])
 
             # Compute ratio features
@@ -55,7 +55,7 @@ class MLEngine:
             features_ab_dict["iat_ratio"] = iat_ratio
             features_ab_dict["pps_ratio"] = pps_ratio
 
-            # Build AB DataFrame with expected features
+            # Build AB DataFrame
             X_ab = pd.DataFrame([[features_ab_dict.get(name, 0) for name in self.feature_names]],
                                 columns=self.feature_names)
 
@@ -70,7 +70,7 @@ class MLEngine:
             raw_behaviour = int(f_a.result()[0])
             raw_academic = int(f_b.result()[0])
 
-            # Decode labels if encoders exist
+            # Decode labels
             if self.label_encoder_a is not None:
                 behaviour_label = self.label_encoder_a.inverse_transform([raw_behaviour])[0]
             else:
@@ -80,15 +80,48 @@ class MLEngine:
                 academic_label = self.label_encoder_b.inverse_transform([raw_academic])[0]
                 academic = 1 if academic_label == "academic" else 0
             else:
-                # Fallback: assume 0 = academic, 1 = non_academic (based on training)
-                academic = 1 if raw_academic == 0 else 0
+                academic = 1 if raw_academic == 0 else 0   # fallback
 
             packet_count = features_cd_dict.get("packet_count", 0)
-
-            # Stricter attack detection
             final_attack = 0
+            # Base attack detection (strict)
             if attack_confidence > 0.95 and packet_count > 50:
                 final_attack = 1
+
+            # ------- POST-PROCESSING RULES (to reduce false positives) -------
+            domain = metadata.get("source", "") if metadata else ""
+            domain_lower = domain.lower() if domain else ""
+
+            # 1. If domain is in safe list, force attack=0 and academic=0
+            safe_domains = ['google', 'youtube', 'github', 'ieee', 'springer', 'sciencedirect', 
+                            'researchgate', 'stackoverflow', 'w3schools', 'coursera', 'zoom', 'teams']
+            if any(sd in domain_lower for sd in safe_domains):
+                if final_attack == 1:
+                    logger.info(f"[ML] Override attack=1 -> 0 for safe domain: {domain}")
+                    final_attack = 0
+                # For safe domains, we keep academic as is (they might be academic sites)
+                # but if we want to reduce priority for non-academic safe domains, we can set academic=0 here.
+                # However, we'll leave it to policy engine to decide.
+
+            # 2. If domain is unknown (IP address) and ML says academic=1, force academic=0
+            if (not domain or domain == "unknown") and academic == 1:
+                logger.info(f"[ML] Override academic=1 -> 0 for unknown IP flow")
+                academic = 0
+
+            # 3. If packet count is low (< 30), reduce attack confidence (already covered by threshold)
+            # 4. If confidence is moderate but attack flag is set, double-check with behaviour
+            if final_attack == 1 and attack_confidence < 0.98 and packet_count < 100:
+                logger.info(f"[ML] Suppress attack due to moderate confidence and low packets: conf={attack_confidence:.2f}, pkts={packet_count}")
+                final_attack = 0
+
+            # 5. If behaviour is "media" or "chat" and academic=1 but domain doesn't look academic, force academic=0
+            # This helps prevent YouTube, Spotify etc. from getting academic priority.
+            if academic == 1 and behaviour_label in ["media", "chat"]:
+                # Check if domain contains academic keywords (simple list)
+                academic_keywords = ['.edu', 'ieee', 'springer', 'sciencedirect', 'researchgate', 'scholar', 'arxiv', 'coursera']
+                if not any(kw in domain_lower for kw in academic_keywords):
+                    logger.info(f"[ML] Override academic=1 -> 0 for media/chat flow without academic domain: {domain}")
+                    academic = 0
 
             logger.info(
                 f"[ML] Result: attack={final_attack} (conf:{attack_confidence:.2f}), "
