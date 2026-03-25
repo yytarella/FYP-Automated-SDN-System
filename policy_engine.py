@@ -28,6 +28,7 @@ class QoSPolicyEngine:
             'github', 'youtube', 'ieee', 'sciencedirect', 'researchgate'
         ]
 
+
     def is_academic_domain(self, source):
         """Tier 1A: Hardcoded domain check to guarantee accuracy for known sites."""
         if not source or source == "unknown":
@@ -82,16 +83,28 @@ class QoSPolicyEngine:
 
         # --- 2. MULTI-LAYER IDENTIFICATION ---
         # Tier 1A: Domain matching
+        is_safe_domain = any(kw in final_source for kw in self.global_safe_list)
         is_edu_domain = self.is_academic_domain(final_source)
         # Tier 1B: ML result
         is_edu_ml = ml_result.get("academic", 0) == 1
-        
         # Final status: Academic if EITHER layer detects it
         final_academic_status = is_edu_domain or is_edu_ml
-        
         # Check against global infrastructure whitelist
         is_safe_infra = any(kw in final_source for kw in self.global_safe_list)
 
+        if is_safe_domain or final_academic_status:
+            if is_attack == 1:
+                logger.info(f"[POLICY] Shielded safe domain from ML misclassification: {final_source}")
+            score = self.compute_score(ml_result.get("behaviour", "unknown"), final_academic_status)
+            priority = "HIGH" if score >= 8 else ("MEDIUM" if score >= 1 else "LOW")
+            return {
+                "action": "ALLOW",
+                "priority": priority,
+                "score": score,
+                "reason": "Safe Domain Override",
+                "source_identified": final_source
+            }
+        
         # --- 3. SECURITY MITIGATION (Anti-False Positive) ---
         if is_attack == 1:
             # SHIELD 1: Don't block known safe or academic sites

@@ -228,8 +228,8 @@ class CaptureEngine:
             # Trigger condition: sufficient packets and duration
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
             duration = flow["last_seen"] - flow["start"]
-
-            if total_pkts >= self.min_packets and duration >= 2.0:
+            has_domain = flow.get("host") is not None or key[1] in self.ip_domain_map
+            if total_pkts >= self.min_packets and duration >= 2.0 and has_domain:
                 stats = self.build_stats(flow)
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
                 metadata = {
