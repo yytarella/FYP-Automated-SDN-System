@@ -116,15 +116,10 @@ class QoSPolicyEngine:
 
         logger.info(f"[ACADEMIC CHECK] raw source = {source}")
 
-        source = source.lower().strip()
-
-        if ":" in source:
-            source = source.split(":")[0]
-
         if not source or source == "unknown":
             return False
 
-        source = source.lower()
+        source = source.lower().strip()
 
         for keyword in self.academic_keywords:
             if keyword in source:
