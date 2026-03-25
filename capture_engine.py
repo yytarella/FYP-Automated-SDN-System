@@ -240,8 +240,8 @@ class CaptureEngine:
                 }
 
                 callback(
-                    self.build_features_1cd_dict(stats),
-                    self.build_features_1ab_dict(stats),
+                    self.build_features_1cd(stats),
+                    self.build_features_1ab(stats),
                     metadata
                 )
                 flow["processed"] = True
