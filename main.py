@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class QoSSystem:
 
     def __init__(self):
-        self.capture_engine = CaptureEngine()
+        self.capture_engine = CaptureEngine(interfaces=['ens33', 'ens37', 'ens38'], min_packets=60)
         self.ml_engine = MLEngine()
         self.policy_engine = QoSPolicyEngine()
 
