@@ -37,12 +37,15 @@ class QoSSystem:
 
             behaviour_label = map_behaviour(ml_result["behaviour"])
 
-            decision = self.policy_engine.decide({
+            decision = self.policy_engine.decide(
+            {
                 "attack": ml_result["attack"],
                 "behaviour": behaviour_label,
                 "academic": ml_result["academic"]
-            })
-
+            },
+            source=metadata.get("source")
+            )
+            
             logger.info(
                 f"[FLOW] {metadata.get('source', 'unknown')} | "
                 f"Behaviour={behaviour_label} | "

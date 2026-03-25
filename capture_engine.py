@@ -11,6 +11,8 @@ class CaptureEngine:
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
+        self.academic_ip_cache = {}
+        self.ip_domain_map = {}
 
     def canonical_key(self, p):
         a = (p["src"], p["sport"])
@@ -106,9 +108,7 @@ class CaptureEngine:
             "flow_duration": flow["last_seen"] - flow["start"]
         }
 
-    # =========================
-    # EXACT MATCH: TIER1CD
-    # =========================
+    # Capture features: tier1cd
     def build_features_1cd(self, s):
 
         return [
@@ -144,9 +144,7 @@ class CaptureEngine:
             s["flow_duration"]
         ]
 
-    # =========================
-    # EXACT MATCH: TIER1AB
-    # =========================
+    # Capture Features: tier1ab
     def build_features_1ab(self, s):
 
         return [
@@ -231,6 +229,23 @@ class CaptureEngine:
             if p.get("host"):
                 flow["host"] = p["host"]
 
+                self.ip_domain_map[key[1]] = p["host"]
+
+            # host = flow.get("host")
+            # dst_ip = key[1]
+
+            # if host:
+            #     host_l = host.lower()
+
+            #     academic_keywords = [
+            #         "ieee", "acm", "springer", "sciencedirect",
+            #         "elsevier", "wiley", "jstor", "arxiv",
+            #         "researchgate", "scholar.google"
+            #     ]
+
+            #     if any(k in host_l for k in academic_keywords):
+            #         self.academic_ip_cache[dst_ip] = True
+
             if direction == "fwd":
                 flow["fwd"].append((p["time"], p["length"]))
             else:
@@ -248,7 +263,9 @@ class CaptureEngine:
             features_1ab = self.build_features_1ab(stats)
 
             metadata = {
-                "source": flow.get("host") or "unknown"
+                "source": flow.get("host") or "unknown",
+                "dst_ip": key[1],
+                "mapped_domain": self.ip_domain_map.get(key[1])
             }
 
             callback(features_1cd, features_1ab, metadata)

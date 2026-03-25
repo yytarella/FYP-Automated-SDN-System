@@ -71,7 +71,6 @@ class QoSPolicyEngine:
 
         # search / academic tools
         "scholar.google",
-        "google scholar",
         "refworks",
         "mendeley",
         "zotero",
@@ -150,11 +149,18 @@ class QoSPolicyEngine:
 
         return score
 
-    def decide(self, ml_result, source=None):
+    def decide(self, ml_result, source=None, metadata = None):
 
         # CONTEXT OVERRIDE (key fix)
-        if self.is_academic_domain(source):
+        mapped_domain = None
+        if metadata:
+            mapped_domain = metadata.get("mapped_domain")
+
+        if mapped_domain and self.is_academic_domain(mapped_domain):
             ml_result["academic"] = 1
+
+        elif self.is_academic_domain(source):
+            ml_result["academic"] = 11
 
         # ATTACK
         if ml_result["attack"] == 1:
