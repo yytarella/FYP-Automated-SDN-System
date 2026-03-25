@@ -108,11 +108,18 @@ class QoSPolicyEngine:
         "turnitin",
         "quizlet",
         "chegg",
-        "scribd"
+        "scribd",
         "drive"
     ]
 
     def is_academic_domain(self, source):
+
+        logger.info(f"[ACADEMIC CHECK] raw source = {source}")
+
+        source = source.lower().strip()
+
+        if ":" in source:
+            source = source.split(":")[0]
 
         if not source or source == "unknown":
             return False
