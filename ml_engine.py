@@ -19,6 +19,9 @@ class MLEngine:
             self.model_b = bundle_b["model"]
             self.feature_names = bundle_a["features"]
             
+            self.label_encoder_a = bundle_a.get("label_encoder")
+            self.feature_names_cd = self.model_cd.feature_names_in_
+
             # Map numerical outputs to policy-friendly strings
             self.behaviour_map = {
                 0: "background",
@@ -51,44 +54,48 @@ class MLEngine:
             logger.warning("Feature vector AB is too short for ratio calculation")
             return features_ab
 
-    def infer(self, features_cd, features_ab):
+    def infer(self, features_cd_dict, features_ab_dict, metadata):
         try:
-            X_cd = np.array(features_cd).reshape(1, -1)
-            features_ab_full = self.add_ratio_features(features_ab)
+            X_cd = np.array([[features_cd_dict.get(name, 0) for name in self.feature_names_cd]])
+            pl_ratio = self.safe_ratio(features_ab_dict.get("forward_pl_mean", 0),
+                                       features_ab_dict.get("reverse_pl_mean", 0))
+            iat_ratio = self.safe_ratio(features_ab_dict.get("forward_piat_mean", 0),
+                                        features_ab_dict.get("reverse_piat_mean", 0))
+            pps_ratio = self.safe_ratio(features_ab_dict.get("forward_pps_mean", 0),
+                                        features_ab_dict.get("reverse_pps_mean", 0))
 
-            # Feature length validation
-            if len(features_ab_full) != len(self.feature_names):
-                logger.error(f"Dimension mismatch: {len(features_ab_full)} vs {len(self.feature_names)}")
-                return {"attack": 0, "behaviour": "unknown", "academic": 0}
+            features_ab_dict["pl_mean_ratio"] = pl_ratio
+            features_ab_dict["iat_ratio"] = iat_ratio
+            features_ab_dict["pps_ratio"] = pps_ratio
 
-            X_ab = pd.DataFrame([features_ab_full], columns=self.feature_names)
+            X_ab = pd.DataFrame([ [features_ab_dict.get(name, 0) for name in self.feature_names_ab] ],
+                                columns=self.feature_names_ab)
 
-            # Parallel inference
             f_cd_proba = self.executor.submit(self.model_cd.predict_proba, X_cd)
             f_a = self.executor.submit(self.model_a.predict, X_ab)
             f_b = self.executor.submit(self.model_b.predict, X_ab)
 
-            # Attack detection with confidence threshold
-            # index [0][1] is usually the probability of class 1 (Attack)
             attack_probs = f_cd_proba.result()[0]
             attack_confidence = attack_probs[1] if len(attack_probs) > 1 else 0
-            
-            # Behavior and Academic results
+
             raw_behaviour = int(f_a.result()[0])
-            academic = int(f_b.result()[0])
+            raw_academic = int(f_b.result()[0])
 
-            # Determine Attack status with stability filters
-            # packet_count is usually at the end of the CD feature vector
-            packet_count = features_cd[-2] if len(features_cd) > 2 else 0
-            
+            if self.label_encoder_a is not None:
+                behaviour_label = self.label_encoder_a.inverse_transform([raw_behaviour])[0]
+            else:
+                behaviour_label = self.behaviour_map.get(raw_behaviour, "unknown")
+
+            if self.label_encoder_b is not None:
+                academic_label = self.label_encoder_b.inverse_transform([raw_academic])[0]
+                academic = 1 if academic_label == "academic" else 0
+            else:
+                academic = raw_academic
+
+            packet_count = features_cd_dict.get("packet_count", 0)
             final_attack = 0
-            if attack_confidence > 0.85: # High confidence threshold
-                if packet_count > 15: # Ignore very first few packets to avoid false positives
-                    final_attack = 1
-                else:
-                    logger.info(f"Suspicious flow detected but insufficient data. Packets: {packet_count}")
-
-            behaviour_label = self.behaviour_map.get(raw_behaviour, "unknown")
+            if attack_confidence > 0.85 and packet_count > 15:
+                final_attack = 1
 
             logger.info(
                 f"[ML] Result: attack={final_attack} (conf:{attack_confidence:.2f}), "
@@ -103,9 +110,10 @@ class MLEngine:
             }
 
         except Exception as e:
-            logger.error(f"Inference pipeline failed: {e}")
+            logger.error(f"Inference pipeline failed: {e}", exc_info=True)
             return {
-                "attack": 0, 
-                "behaviour": "unknown", 
-                "academic": 0
+                "attack": 0,
+                "behaviour": "unknown",
+                "academic": 0,
+                "confidence": 0.0
             }

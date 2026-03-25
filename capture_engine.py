@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class CaptureEngine:
 
-    def __init__(self, interface="ens37", min_packets=20):
+    def __init__(self, interface="ens37", min_packets=60):
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
@@ -116,27 +116,80 @@ class CaptureEngine:
 
     def build_features_1cd(self, s):
         """Strictly follows the trained model's 1CD feature vector structure."""
-        return [
-            s["f_pl"]["mean"], s["f_pl"]["var"], s["f_pl"]["min"], s["f_pl"]["max"], s["f_pl"]["q1"], s["f_pl"]["q3"],
-            s["f_piat"]["mean"], s["f_piat"]["var"], s["f_piat"]["min"], s["f_piat"]["max"], s["f_piat"]["q1"], s["f_piat"]["q3"],
-            s["r_pl"]["mean"], s["r_pl"]["var"], s["r_pl"]["min"], s["r_pl"]["max"], s["r_pl"]["q1"], s["r_pl"]["q3"],
-            s["r_piat"]["mean"], s["r_piat"]["var"], s["r_piat"]["min"], s["r_piat"]["max"], s["r_piat"]["q1"], s["r_piat"]["q3"],
-            s["packet_count"], s["flow_duration"]
-        ]
+        return {
+            "forward_pl_mean": s["f_pl"]["mean"],
+            "forward_pl_var": s["f_pl"]["var"],
+            "forward_pl_min": s["f_pl"]["min"],
+            "forward_pl_max": s["f_pl"]["max"],
+            "forward_pl_q1": s["f_pl"]["q1"],
+            "forward_pl_q3": s["f_pl"]["q3"],
+            "forward_piat_mean": s["f_piat"]["mean"],
+            "forward_piat_var": s["f_piat"]["var"],
+            "forward_piat_min": s["f_piat"]["min"],
+            "forward_piat_max": s["f_piat"]["max"],
+            "forward_piat_q1": s["f_piat"]["q1"],
+            "forward_piat_q3": s["f_piat"]["q3"],
+            "reverse_pl_mean": s["r_pl"]["mean"],
+            "reverse_pl_var": s["r_pl"]["var"],
+            "reverse_pl_min": s["r_pl"]["min"],
+            "reverse_pl_max": s["r_pl"]["max"],
+            "reverse_pl_q1": s["r_pl"]["q1"],
+            "reverse_pl_q3": s["r_pl"]["q3"],
+            "reverse_piat_mean": s["r_piat"]["mean"],
+            "reverse_piat_var": s["r_piat"]["var"],
+            "reverse_piat_min": s["r_piat"]["min"],
+            "reverse_piat_max": s["r_piat"]["max"],
+            "reverse_piat_q1": s["r_piat"]["q1"],
+            "reverse_piat_q3": s["r_piat"]["q3"],
+            "packet_count": s["packet_count"],
+            "flow_duration": s["flow_duration"]
+        }
 
     def build_features_1ab(self, s):
         """Strictly follows the trained model's 1AB feature vector structure."""
-        return [
-            s["f_rate"]["bps"]["max"], s["f_rate"]["bps"]["mean"], s["f_rate"]["bps"]["min"], s["f_rate"]["bps"]["var"],
-            s["f_piat"]["max"], s["f_piat"]["mean"], s["f_piat"]["min"], s["f_piat"]["q1"], s["f_piat"]["q3"], s["f_piat"]["var"],
-            s["f_pl"]["max"], s["f_pl"]["mean"], s["f_pl"]["min"], s["f_pl"]["q1"], s["f_pl"]["q3"], s["f_pl"]["var"],
-            s["f_rate"]["pps"]["max"], s["f_rate"]["pps"]["mean"], s["f_rate"]["pps"]["min"], s["f_rate"]["pps"]["var"],
-            s["r_rate"]["bps"]["max"], s["r_rate"]["bps"]["mean"], s["r_rate"]["bps"]["min"], s["r_rate"]["bps"]["var"],
-            s["r_piat"]["max"], s["r_piat"]["mean"], s["r_piat"]["min"], s["r_piat"]["q1"], s["r_piat"]["q3"], s["r_piat"]["var"],
-            s["r_pl"]["max"], s["r_pl"]["mean"], s["r_pl"]["min"], s["r_pl"]["q1"], s["r_pl"]["q3"], s["r_pl"]["var"],
-            s["r_rate"]["pps"]["max"], s["r_rate"]["pps"]["mean"], s["r_rate"]["pps"]["min"], s["r_rate"]["pps"]["var"]
-        ]
-
+        return {
+            "forward_bps_max": s["f_rate"]["bps"]["max"],
+            "forward_bps_mean": s["f_rate"]["bps"]["mean"],
+            "forward_bps_min": s["f_rate"]["bps"]["min"],
+            "forward_bps_var": s["f_rate"]["bps"]["var"],
+            "forward_piat_max": s["f_piat"]["max"],
+            "forward_piat_mean": s["f_piat"]["mean"],
+            "forward_piat_min": s["f_piat"]["min"],
+            "forward_piat_q1": s["f_piat"]["q1"],
+            "forward_piat_q3": s["f_piat"]["q3"],
+            "forward_piat_var": s["f_piat"]["var"],
+            "forward_pl_max": s["f_pl"]["max"],
+            "forward_pl_mean": s["f_pl"]["mean"],
+            "forward_pl_min": s["f_pl"]["min"],
+            "forward_pl_q1": s["f_pl"]["q1"],
+            "forward_pl_q3": s["f_pl"]["q3"],
+            "forward_pl_var": s["f_pl"]["var"],
+            "forward_pps_max": s["f_rate"]["pps"]["max"],
+            "forward_pps_mean": s["f_rate"]["pps"]["mean"],
+            "forward_pps_min": s["f_rate"]["pps"]["min"],
+            "forward_pps_var": s["f_rate"]["pps"]["var"],
+            "reverse_bps_max": s["r_rate"]["bps"]["max"],
+            "reverse_bps_mean": s["r_rate"]["bps"]["mean"],
+            "reverse_bps_min": s["r_rate"]["bps"]["min"],
+            "reverse_bps_var": s["r_rate"]["bps"]["var"],
+            "reverse_piat_max": s["r_piat"]["max"],
+            "reverse_piat_mean": s["r_piat"]["mean"],
+            "reverse_piat_min": s["r_piat"]["min"],
+            "reverse_piat_q1": s["r_piat"]["q1"],
+            "reverse_piat_q3": s["r_piat"]["q3"],
+            "reverse_piat_var": s["r_piat"]["var"],
+            "reverse_pl_max": s["r_pl"]["max"],
+            "reverse_pl_mean": s["r_pl"]["mean"],
+            "reverse_pl_min": s["r_pl"]["min"],
+            "reverse_pl_q1": s["r_pl"]["q1"],
+            "reverse_pl_q3": s["r_pl"]["q3"],
+            "reverse_pl_var": s["r_pl"]["var"],
+            "reverse_pps_max": s["r_rate"]["pps"]["max"],
+            "reverse_pps_mean": s["r_rate"]["pps"]["mean"],
+            "reverse_pps_min": s["r_rate"]["pps"]["min"],
+            "reverse_pps_var": s["r_rate"]["pps"]["var"]
+        }
+    
     def is_academic(self, domain):
         """Performs keyword matching to identify academic traffic."""
         if not domain or domain == "unknown": return False
@@ -178,10 +231,7 @@ class CaptureEngine:
 
             if total_pkts >= self.min_packets and duration >= 2.0:
                 stats = self.build_stats(flow)
-                
-                # Retrieve domain from SNI or DNS cache
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
-
                 metadata = {
                     "source": domain_name,
                     "mapped_domain": domain_name,
@@ -189,6 +239,9 @@ class CaptureEngine:
                     "is_academic": self.is_academic(domain_name)
                 }
 
-                # Send data to main logic
-                callback(self.build_features_1cd(stats), self.build_features_1ab(stats), metadata)
+                callback(
+                    self.build_features_1cd_dict(stats),
+                    self.build_features_1ab_dict(stats),
+                    metadata
+                )
                 flow["processed"] = True
