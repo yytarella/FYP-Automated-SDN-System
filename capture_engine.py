@@ -10,7 +10,7 @@ class CaptureEngine:
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
-        self.ip_domain_map = {}   # IP -> domain (via DNS)
+        self.ip_domain_map = {}
         self.academic_keywords = [
             'ieee', 'sciencedirect', 'springer', 'researchgate',
             'arxiv', 'scholar', 'edu', 'acm', 'mdpi', 'nature',
@@ -32,13 +32,10 @@ class CaptureEngine:
             if not hasattr(pkt, 'ip'):
                 return None
             host = None
-            # HTTP Host header
             if hasattr(pkt, "http") and hasattr(pkt.http, "host"):
                 host = str(pkt.http.host)
-            # TLS SNI
             elif hasattr(pkt, "tls") and hasattr(pkt.tls, "handshake_extensions_server_name"):
                 host = str(pkt.tls.handshake_extensions_server_name)
-            # DNS response
             elif hasattr(pkt, "dns") and hasattr(pkt.dns, "a"):
                 query_name = pkt.dns.qry_name
                 resolved_ip = pkt.dns.a
@@ -199,14 +196,31 @@ class CaptureEngine:
             key, direction = self.canonical_key(p)
 
             if key not in self.flows:
+                # Store original 5-tuple for port-based rules, plus retry counter
                 self.flows[key] = {
                     "start": p["time"], "last_seen": p["time"],
-                    "fwd": [], "rev": [], "host": p.get("host"), "processed": False
+                    "fwd": [], "rev": [], "host": p.get("host"), "processed": False,
+                    "retry_count": 0,               # track retry attempts
+                    "original": {
+                        "src": p["src"], "dst": p["dst"],
+                        "sport": p["sport"], "dport": p["dport"],
+                        "proto": p["proto"]
+                    }
                 }
 
             flow = self.flows[key]
+
+            # If already processed, check if we should re-evaluate with more data
             if flow["processed"]:
-                continue
+                total_pkts = len(flow["fwd"]) + len(flow["rev"])
+                # Allow one retry after reaching 200 packets (or any threshold you set)
+                if total_pkts > 200 and flow["retry_count"] == 0:
+                    flow["processed"] = False
+                    flow["retry_count"] = 1
+                    logger.info(f"Retrying flow {key} after {total_pkts} packets")
+                    # Do not skip this packet; continue to update flow with new data
+                else:
+                    continue   # already processed and no retry allowed
 
             flow["last_seen"] = p["time"]
             if p.get("host"):
@@ -222,7 +236,6 @@ class CaptureEngine:
             duration = flow["last_seen"] - flow["start"]
             has_domain = flow.get("host") is not None or key[1] in self.ip_domain_map
 
-            # Only process when enough packets, time, and domain is known
             if total_pkts >= self.min_packets and duration >= 2.0 and has_domain:
                 stats = self.build_stats(flow)
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
@@ -230,7 +243,10 @@ class CaptureEngine:
                     "source": domain_name,
                     "mapped_domain": domain_name,
                     "flow_packet_count": total_pkts,
-                    "is_academic": self.is_academic(domain_name)
+                    "is_academic": self.is_academic(domain_name),
+                    "src_port": flow["original"]["sport"],
+                    "dst_port": flow["original"]["dport"],
+                    "proto": flow["original"]["proto"]
                 }
 
                 callback(
