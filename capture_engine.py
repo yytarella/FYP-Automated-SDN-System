@@ -15,7 +15,6 @@ class CaptureEngine:
         :param min_packets: minimum packets to collect before analyzing a flow
         """
         if interfaces is None:
-            # default to 'any' if not specified
             interfaces = ['any']
         self.interfaces = interfaces if isinstance(interfaces, list) else [interfaces]
         self.min_packets = min_packets
@@ -54,11 +53,12 @@ class CaptureEngine:
                 query_name = pkt.dns.qry_name
                 resolved_ip = pkt.dns.a
                 self.ip_domain_map[str(resolved_ip)] = str(query_name).rstrip('.')
+            # Convert ports to integers for later comparison
             return {
                 "src": pkt.ip.src,
                 "dst": pkt.ip.dst,
-                "sport": pkt[pkt.transport_layer].srcport,
-                "dport": pkt[pkt.transport_layer].dstport,
+                "sport": int(pkt[pkt.transport_layer].srcport),
+                "dport": int(pkt[pkt.transport_layer].dstport),
                 "length": int(pkt.length),
                 "time": float(pkt.sniff_timestamp),
                 "proto": pkt.transport_layer,
@@ -205,7 +205,6 @@ class CaptureEngine:
 
         key, direction = self.canonical_key(p)
 
-        # Use lock when accessing shared structures
         with self.lock:
             if key not in self.flows:
                 self.flows[key] = {
@@ -221,7 +220,6 @@ class CaptureEngine:
 
             flow = self.flows[key]
 
-            # Retry mechanism: if already processed but we have many more packets, re-evaluate
             if flow["processed"]:
                 total_pkts = len(flow["fwd"]) + len(flow["rev"])
                 if total_pkts > 200 and flow["retry_count"] == 0:
@@ -229,7 +227,7 @@ class CaptureEngine:
                     flow["retry_count"] = 1
                     logger.info(f"Retrying flow {key} after {total_pkts} packets")
                 else:
-                    return   # already processed and no retry allowed
+                    return
 
             flow["last_seen"] = p["time"]
             if p.get("host"):
@@ -244,11 +242,10 @@ class CaptureEngine:
             total_pkts = len(flow["fwd"]) + len(flow["rev"])
             duration = flow["last_seen"] - flow["start"]
             has_domain = flow.get("host") is not None or key[1] in self.ip_domain_map
-            is_attack_port = flow["original"]["dport"] in self.attack_ports
-            # Also consider low ports (<1024) without domain as suspicious
-            is_low_port_without_domain = (flow["original"]["dport"] < 1024) and not has_domain
+            dst_port = flow["original"]["dport"]  # already int
+            is_attack_port = dst_port in self.attack_ports
+            is_low_port_without_domain = (dst_port < 1024) and not has_domain
 
-            # Trigger if enough packets/duration AND (has domain OR attack port OR low port without domain)
             if total_pkts >= self.min_packets and duration >= 2.0 and (has_domain or is_attack_port or is_low_port_without_domain):
                 stats = self.build_stats(flow)
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
@@ -262,11 +259,6 @@ class CaptureEngine:
                     "proto": flow["original"]["proto"]
                 }
 
-                # Release lock before calling callback (callback may be time-consuming)
-                # But we still need to mark flow as processed inside lock to avoid duplicate calls.
-                # We'll copy necessary data and call callback outside lock.
-                # However, to keep it simple and safe, we keep lock during callback.
-                # For production, consider copying data and releasing lock.
                 callback(
                     self.build_features_1cd(stats),
                     self.build_features_1ab(stats),
@@ -293,6 +285,5 @@ class CaptureEngine:
             t.start()
             threads.append(t)
 
-        # Wait for threads to finish (they run forever)
         for t in threads:
             t.join()
