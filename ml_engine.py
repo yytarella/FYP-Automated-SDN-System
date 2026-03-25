@@ -68,8 +68,8 @@ class MLEngine:
             features_ab_dict["iat_ratio"] = iat_ratio
             features_ab_dict["pps_ratio"] = pps_ratio
 
-            X_ab = pd.DataFrame([ [features_ab_dict.get(name, 0) for name in self.feature_names_ab] ],
-                                columns=self.feature_names_ab)
+            X_ab = pd.DataFrame([ [features_ab_dict.get(name, 0) for name in self.feature_names] ],
+                    columns=self.feature_names)
 
             f_cd_proba = self.executor.submit(self.model_cd.predict_proba, X_cd)
             f_a = self.executor.submit(self.model_a.predict, X_ab)
