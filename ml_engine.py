@@ -20,6 +20,7 @@ class MLEngine:
             self.feature_names = bundle_a["features"]
             
             self.label_encoder_a = bundle_a.get("label_encoder")
+            self.label_encoder_b = bundle_b.get("label_encoder")
             self.feature_names_cd = self.model_cd.feature_names_in_
 
             # Map numerical outputs to policy-friendly strings
