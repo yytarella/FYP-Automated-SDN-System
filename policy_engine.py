@@ -51,54 +51,62 @@ class QoSPolicyEngine:
         return score
 
     def decide(self, ml_result, source=None, metadata=None):
-        """Final decision logic for SDN controller with mitigation for false positives."""
-        
-        # 1. EXTRACT METADATA
-        mapped_domain = metadata.get("mapped_domain") if metadata else None
+        """Refined decision logic to eliminate false positives on known safe domains."""
+    
+        # 1. DATA EXTRACTION
+        mapped_domain = metadata.get("mapped_domain", "unknown") if metadata else "unknown"
         packet_count = metadata.get("flow_packet_count", 0) if metadata else 0
         is_attack = ml_result.get("attack", 0)
         confidence = ml_result.get("conf", 0)
         
-        # Check if the domain is academic via our keyword list
-        is_edu = self.is_academic_domain(source) or self.is_academic_domain(mapped_domain)
+        # Identify domain from both possible sources
+        final_source = str(source if source and source != "unknown" else mapped_domain).lower()
 
-        # 2. ATTACK MITIGATION (False Positive Protection)
-        if is_attack == 1:
-            # Shielding: Only block if confidence is extremely high AND flow is mature
-            if packet_count > 30 and confidence > 0.98:
-                # Even if it looks like an attack, if it's a known academic site, we don't block
-                if not is_edu:
-                    return {
-                        "action": "BLOCK", 
-                        "priority": "NONE", 
-                        "reason": f"Verified Threat (Conf: {confidence})"
-                    }
-            
-            # If not meeting block criteria, we just treat it as a low-priority normal flow
-            logger.info(f"[POLICY] Attack flagged but suppressed (Packets: {packet_count}, Conf: {confidence})")
+        # 2. GLOBAL SAFE LIST (Non-negotiable Pass)
+        # These domains should NEVER be blocked regardless of ML output
+        safe_keywords = ['google', 'ieee', 'youtube', 'sciencedirect', 'akamai', 'github', 'microsoft']
+        is_safe_domain = any(kw in final_source for kw in safe_keywords)
 
-        # 3. QOS SCORING
-        # Use ML-detected academic status OR our domain-based check
+        # 3. ACADEMIC IDENTIFICATION
+        is_edu = self.is_academic_domain(final_source)
         ml_academic = ml_result.get("academic", 0) == 1
         final_academic_status = is_edu or ml_academic
 
+        # 4. MITIGATION STRATEGY (The "Anti-False-Positive" Shield)
+        if is_attack == 1:
+            # CONDITION A: If it's a known safe or academic domain, FORCE ALLOW
+            if is_safe_domain or final_academic_status:
+                logger.info(f"[POLICY] Shielded safe domain from ML misclassification: {final_source}")
+                is_attack = 0 # Override ML
+            
+            # CONDITION B: Only block if flow is mature AND confidence is near absolute
+            # Increased packet_count to 100 to ensure we have seen enough of the flow
+            elif packet_count < 100 or confidence < 0.99:
+                logger.info(f"[POLICY] Suppressed attack flag for immature/uncertain flow: {final_source}")
+                is_attack = 0 # Override ML
+
+        # 5. FINAL BLOCK/PASS DECISION
+        if is_attack == 1:
+            return {
+                "action": "BLOCK", 
+                "priority": "NONE", 
+                "reason": f"Confirmed Threat (Conf: {confidence}, Pkts: {packet_count})"
+            }
+
+        # 6. QOS SCORING & PRIORITY
         score = self.compute_score(
             ml_result.get("behaviour", "unknown"),
             final_academic_status
         )
 
-        # 4. PRIORITY ASSIGNMENT
-        if score >= 8:
-            priority = "HIGH"
-        elif score >= 1:
-            priority = "MEDIUM"
-        else:
-            priority = "LOW"
+        priority = "LOW"
+        if score >= 8: priority = "HIGH"
+        elif score >= 1: priority = "MEDIUM"
 
         return {
             "action": "ALLOW",
             "priority": priority,
             "score": score,
             "reason": "Academic Priority" if final_academic_status else "Standard Flow",
-            "source_identified": source if source != "unknown" else mapped_domain
+            "source_identified": final_source
         }
