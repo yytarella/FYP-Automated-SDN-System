@@ -152,26 +152,20 @@ class QoSPolicyEngine:
 
     def decide(self, ml_result, source=None):
 
-        # -------------------------
         # CONTEXT OVERRIDE (key fix)
-        # -------------------------
         if self.is_academic_domain(source):
             ml_result["academic"] = 1
 
-        # -------------------------
         # ATTACK
-        # -------------------------
         if ml_result["attack"] == 1:
-            return {
-                "action": "BLOCK",
-                "priority": "CRITICAL",
-                "bandwidth": 0,
-                "reason": "ATTACK"
-            }
+            if source is None or source == "unknown":
+                return {
+                    "action": "ALLOW",  
+                    "priority": "LOW",
+                    "reason": "LOW_CONFIDENCE_ATTACK"
+                }
 
-        # -------------------------
         # NORMAL SCORING
-        # -------------------------
         score = self.compute_score(
             ml_result["behaviour"],
             ml_result["academic"]

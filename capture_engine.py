@@ -228,7 +228,7 @@ class CaptureEngine:
 
             flow["last_seen"] = p["time"]
 
-            if p.get("host") and flow.get("host") is None:
+            if p.get("host"):
                 flow["host"] = p["host"]
 
             if direction == "fwd":
