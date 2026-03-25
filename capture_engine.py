@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 class CaptureEngine:
 
-    def __init__(self, interface="ens37", min_packets=60):
+    def __init__(self, interface="any", min_packets=60):
         self.interface = interface
         self.min_packets = min_packets
         self.flows = {}
