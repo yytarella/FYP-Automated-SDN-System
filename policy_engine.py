@@ -66,6 +66,7 @@ class QoSPolicyEngine:
 
         final_source = str(source if source and source != "unknown" else mapped_domain).lower()
 
+
         # ---- 1. PORT-BASED ATTACK DETECTION (direct block) ----
         if dst_port in self.attack_ports:
             logger.warning(f"[POLICY] Known attack port {dst_port} from {final_source} -> BLOCK")
@@ -75,8 +76,21 @@ class QoSPolicyEngine:
                 "reason": f"Attack port {dst_port}",
                 "source_identified": final_source
             }
+        
+        # ---- 2. WEB SCAN DETECTION (ports 80/443, no domain) ----
+        # Check if source is an IP address (no domain)
+        is_ip_source = final_source == "unknown" or all(c.isdigit() or c == '.' for c in final_source)
+        if dst_port in {80, 443} and is_ip_source:
+            if ml_result.get("attack", 0) == 1 or packet_count >= 50:
+                logger.warning(f"[POLICY] Suspicious web traffic (IP only) from {final_source} -> BLOCK")
+                return {
+                    "action": "BLOCK",
+                    "priority": "NONE",
+                    "reason": "Web scan without domain"
+                }
 
-        # ---- 2. SAFE DOMAIN CHECK (always allow) ----
+
+        # ---- 3. SAFE DOMAIN CHECK (always allow) ----
         is_safe_domain = any(kw in final_source for kw in self.global_safe_list)
         if is_safe_domain:
             if is_attack == 1:
@@ -92,7 +106,7 @@ class QoSPolicyEngine:
                 "source_identified": final_source
             }
 
-        # ---- 3. ACADEMIC IDENTIFICATION FOR NON-SAFE DOMAINS ----
+        # ---- 4. ACADEMIC IDENTIFICATION FOR NON-SAFE DOMAINS ----
         # For unknown sources, never trust ML academic result (avoid IP flows gaining priority)
         if final_source == "unknown":
             final_academic_status = False
@@ -101,7 +115,7 @@ class QoSPolicyEngine:
             is_edu_ml = ml_result.get("academic", 0) == 1
             final_academic_status = is_edu_domain or is_edu_ml
 
-        # ---- 4. ATTACK HANDLING (strict for non-safe domains) ----
+        # ---- 5. ATTACK HANDLING (strict for non-safe domains) ----
         if is_attack == 1:
             # Immediate block for high confidence attacks, regardless of packet count
             if confidence >= 0.99:
@@ -123,7 +137,7 @@ class QoSPolicyEngine:
                 logger.info(f"[POLICY] Attack suppressed (confidence {confidence:.3f} too low or packet count {packet_count} insufficient): {final_source}")
                 is_attack = 0  # continue to allow
 
-        # ---- 5. QOS SCORING (if not blocked) ----
+        # ---- 6. QOS SCORING (if not blocked) ----
         behaviour = ml_result.get("behaviour", "unknown")
         score = self.compute_score(behaviour, final_academic_status)
         priority = "HIGH" if score >= 8 else ("MEDIUM" if score >= 1 else "LOW")

@@ -7,17 +7,19 @@ logger = logging.getLogger(__name__)
 
 class CaptureEngine:
 
-    def __init__(self, interfaces=None, min_packets=60):
+    def __init__(self, interfaces=None, min_packets=60, attack_port_min_packets=30):
         """
         Initialize capture engine.
         
         :param interfaces: list of interface names, e.g. ['ens33', 'ens37', 'ens38']
-        :param min_packets: minimum packets to collect before analyzing a flow
+        :param min_packets: minimum packets to collect before analyzing a flow (for normal flows)
+        :param attack_port_min_packets: lower threshold for flows using known attack ports
         """
         if interfaces is None:
             interfaces = ['any']
         self.interfaces = interfaces if isinstance(interfaces, list) else [interfaces]
         self.min_packets = min_packets
+        self.attack_port_min_packets = attack_port_min_packets  # <-- new
         self.flows = {}
         self.ip_domain_map = {}
         self.academic_keywords = [
@@ -247,7 +249,12 @@ class CaptureEngine:
             is_low_port_without_domain = (dst_port < 1024) and not has_domain
             is_web_without_domain = (dst_port in {80, 443}) and not has_domain
 
-            if total_pkts >= self.min_packets and duration >= 2.0 and (has_domain or is_attack_port or is_low_port_without_domain or is_web_without_domain):
+            # Determine required packet threshold based on flow type
+            required_packets = self.min_packets
+            if is_attack_port or is_low_port_without_domain or is_web_without_domain:
+                required_packets = self.attack_port_min_packets
+
+            if total_pkts >= required_packets and duration >= 2.0 and (has_domain or is_attack_port or is_low_port_without_domain or is_web_without_domain):
                 stats = self.build_stats(flow)
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
                 metadata = {
