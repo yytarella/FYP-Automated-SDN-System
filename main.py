@@ -10,26 +10,27 @@ class QoSSystem:
 
     def __init__(self):
         self.capture_engine = CaptureEngine(
-            interfaces=['ens33', 'ens37', 'ens38'],
-            min_packets=60,
-            attack_port_min_packets=30 
+            # ens33 -> internet, ens37 -> client, ens38 -> victim
+            interfaces=['ens33', 'ens37', 'ens38'], 
+            min_packets = 60,
+            attack_port_min_packets = 30 
         )
         self.ml_engine = MLEngine()
         self.policy_engine = QoSPolicyEngine()
 
     def process_flow(self, features_cd_dict, features_ab_dict, metadata):
         try:
-            # 1. Run inference
+            # 1. run inference
             ml_result = self.ml_engine.infer(features_cd_dict, features_ab_dict, metadata)
 
-            # 2. Let policy engine decide (includes attack handling & whitelist)
+            # 2. policy engine decide
             decision = self.policy_engine.decide(
                 ml_result,
                 source=metadata.get("source"),
                 metadata=metadata
             )
 
-            # 3. Log final action
+            # 3. log final action
             if decision["action"] == "BLOCK":
                 logger.warning(
                     f"[BLOCKED] {metadata.get('source', 'unknown')} | "

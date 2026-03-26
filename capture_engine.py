@@ -2,6 +2,7 @@ import pyshark
 import numpy as np
 import logging
 import threading
+import time 
 
 logger = logging.getLogger(__name__)
 
@@ -10,39 +11,49 @@ class CaptureEngine:
     def __init__(self, interfaces=None, min_packets=60, attack_port_min_packets=30):
         """
         Initialize capture engine.
-        
-        :param interfaces: list of interface names, e.g. ['ens33', 'ens37', 'ens38']
-        :param min_packets: minimum packets to collect before analyzing a flow (for normal flows)
-        :param attack_port_min_packets: lower threshold for flows using known attack ports
         """
         if interfaces is None:
             interfaces = ['any']
         self.interfaces = interfaces if isinstance(interfaces, list) else [interfaces]
+        
+        # min packets: minimum packets to collect before analyzing a flow (normal flows)
         self.min_packets = min_packets
+        # attack_port_min_packets: lower threshold for flows using known attack ports
         self.attack_port_min_packets = attack_port_min_packets  # <-- new
         self.flows = {}
         self.ip_domain_map = {}
+
         self.academic_keywords = [
             'ieee', 'sciencedirect', 'springer', 'researchgate',
             'arxiv', 'scholar', 'edu', 'acm', 'mdpi', 'nature',
-            'apu.edu.my', 'university', 'scopus'
+            'apu.edu.my', 'university', 'scopus', 'oxfordjournals', 
+            'cambridge', 'kaggle', 'huggingface', 'moodle', 'microsoft',
+            'campus', 'institute', 'schoolof', 'student', 'course', 
+            'academy', 'learning', 'stackoverflow', 'tensorflow', 'redhat',
+            'cisco', 'kubernetes', 'pytorch', 'school', 'notion', 'grammarly',
+            'conference', 'journal', 'citation', 'abstract', 'thesis'
         ]
-        # Attack ports: known ports often used for exploits (including IRC, FTP, etc.)
+        # attack ports: known ports often used for exploits (including IRC, FTP, etc.)
         self.attack_ports = {21, 22, 23, 25, 80, 443, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555, 8080, 8443}
-        # Lock for thread-safe access to shared dictionaries
+        
+        self.flow_timeout = 300 # 5 minutes inactivity cleanup
+        self.cleanup_interval() = 60 # run cleanup every 60 seconds
+        # lock for thread-safe access to shared dictionaries
         self.lock = threading.Lock()
+        self._start_flow_cleanup()
 
     def canonical_key(self, p):
-        """Generate consistent 5-tuple key regardless of direction."""
+        # generate 5-tuple key for both directions
         a = (p["src"], p["sport"])
         b = (p["dst"], p["dport"])
         if a <= b:
             return (p["src"], p["dst"], p["sport"], p["dport"], p["proto"]), "fwd"
+        
         else:
             return (p["dst"], p["src"], p["dport"], p["sport"], p["proto"]), "rev"
 
     def packet_to_dict(self, pkt):
-        """Convert pyshark packet to dict, extract SNI/DNS metadata."""
+        # convert pyshark packet to dict, extract source metadata
         try:
             if not hasattr(pkt, 'ip'):
                 return None
@@ -55,7 +66,8 @@ class CaptureEngine:
                 query_name = pkt.dns.qry_name
                 resolved_ip = pkt.dns.a
                 self.ip_domain_map[str(resolved_ip)] = str(query_name).rstrip('.')
-            # Convert ports to integers for later comparison
+            
+            # convert ports to int for later comparison
             return {
                 "src": pkt.ip.src,
                 "dst": pkt.ip.dst,
@@ -66,13 +78,15 @@ class CaptureEngine:
                 "proto": pkt.transport_layer,
                 "host": host
             }
+        
         except Exception:
             return None
 
     def compute_stats(self, arr):
-        """Basic statistics for an array."""
+        # basic statistics computation
         if len(arr) == 0:
             return {"mean": 0, "var": 0, "min": 0, "max": 0, "q1": 0, "q3": 0}
+        
         return {
             "mean": np.mean(arr),
             "var": np.var(arr) if len(arr) > 1 else 0,
@@ -83,13 +97,15 @@ class CaptureEngine:
         }
 
     def compute_rate(self, lengths, times):
-        """Calculate bps and pps rates."""
+        # calculate bps and pps rates
         if len(times) < 2:
             return {"bps": {"mean": 0, "var": 0, "min": 0, "max": 0},
                     "pps": {"mean": 0, "var": 0, "min": 0, "max": 0}}
+        
         duration = max(times[-1] - times[0], 0.1)
         bps_series = [l / duration for l in lengths]
         pps_series = [1 / duration for _ in lengths]
+        
         return {
             "bps": {"mean": np.mean(bps_series), "var": np.var(bps_series),
                     "min": np.min(bps_series), "max": np.max(bps_series)},
@@ -98,13 +114,14 @@ class CaptureEngine:
         }
 
     def build_stats(self, flow):
-        """Aggregate flow data into statistical summaries."""
+        # aggregate flow data into statistical summary
         f_times = [x[0] for x in flow["fwd"]]
         f_lens = [x[1] for x in flow["fwd"]]
         r_times = [x[0] for x in flow["rev"]]
         r_lens = [x[1] for x in flow["rev"]]
         f_iat = np.diff(f_times) if len(f_times) > 1 else []
         r_iat = np.diff(r_times) if len(r_times) > 1 else []
+        
         return {
             "f_pl": self.compute_stats(f_lens),
             "f_piat": self.compute_stats(f_iat),
@@ -117,7 +134,7 @@ class CaptureEngine:
         }
 
     def build_features_1cd(self, s):
-        """Return dictionary of 1CD features (attack detection)."""
+        # return dictionary for tier1cd features (attack detection)
         return {
             "forward_pl_mean": s["f_pl"]["mean"],
             "forward_pl_var": s["f_pl"]["var"],
@@ -148,7 +165,7 @@ class CaptureEngine:
         }
 
     def build_features_1ab(self, s):
-        """Return dictionary of 1AB features (behaviour + academic)."""
+        # return dictionary for tier1ab features (behaviour & academic context)
         return {
             "forward_bps_max": s["f_rate"]["bps"]["max"],
             "forward_bps_mean": s["f_rate"]["bps"]["mean"],
@@ -193,14 +210,15 @@ class CaptureEngine:
         }
 
     def is_academic(self, domain):
-        """Check if domain contains academic keywords."""
+        # check if domain contains self defined academic keywords
         if not domain or domain == "unknown":
             return False
+        
         d_low = domain.lower()
         return any(kw in d_low for kw in self.academic_keywords)
 
     def _process_packet(self, pkt, callback):
-        """Process a single packet (called from each interface thread)."""
+        # process into a single packet (called from each interface thread)
         p = self.packet_to_dict(pkt)
         if not p:
             return
@@ -238,6 +256,7 @@ class CaptureEngine:
 
             if direction == "fwd":
                 flow["fwd"].append((p["time"], p["length"]))
+            
             else:
                 flow["rev"].append((p["time"], p["length"]))
 
@@ -249,7 +268,7 @@ class CaptureEngine:
             is_low_port_without_domain = (dst_port < 1024) and not has_domain
             is_web_without_domain = (dst_port in {80, 443}) and not has_domain
 
-            # Determine required packet threshold based on flow type
+            # determine required packet threshold based on flow type
             required_packets = self.min_packets
             if is_attack_port or is_low_port_without_domain or is_web_without_domain:
                 required_packets = self.attack_port_min_packets
@@ -295,3 +314,21 @@ class CaptureEngine:
 
         for t in threads:
             t.join()
+
+    def _start_flow_cleanup(self):
+        # periodically remove stale flows to free memory       
+        def cleanup_old_flows():
+            now = time.time()
+            with self.lock:
+                to_delete = [k for k, f in self.flows.items()
+                             if now - f["last_seen"] > self.flow_timeout]
+                for k in to_delete:
+                    del self.flows[k]
+                if to_delete:
+                    logger.info(f"[Cleanup] Removed {len(to_delete)} stale flows")
+
+            # schedule for next cleanup
+            threading.Timer(self.cleanup_interval, cleanup_old_flows).start()
+
+        # start the first cleanup after interval seconds
+        threading.Timer(self.cleanup_interval, cleanup_old_flows).start()

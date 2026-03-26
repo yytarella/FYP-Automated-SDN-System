@@ -40,10 +40,10 @@ class MLEngine:
 
     def infer(self, features_cd_dict, features_ab_dict, metadata):
         try:
-            # Build CD vector
+            # build tier1cd vector
             X_cd = np.array([[features_cd_dict.get(name, 0) for name in self.feature_names_cd]])
 
-            # Compute ratio features
+            # compute ratio features
             pl_ratio = self.safe_ratio(features_ab_dict.get("forward_pl_mean", 0),
                                        features_ab_dict.get("reverse_pl_mean", 0))
             iat_ratio = self.safe_ratio(features_ab_dict.get("forward_piat_mean", 0),
@@ -55,11 +55,11 @@ class MLEngine:
             features_ab_dict["iat_ratio"] = iat_ratio
             features_ab_dict["pps_ratio"] = pps_ratio
 
-            # Build AB DataFrame
+            # build tier1ab DataFrame
             X_ab = pd.DataFrame([[features_ab_dict.get(name, 0) for name in self.feature_names]],
                                 columns=self.feature_names)
 
-            # Parallel inference
+            # parallel inference
             f_cd_proba = self.executor.submit(self.model_cd.predict_proba, X_cd)
             f_a = self.executor.submit(self.model_a.predict, X_ab)
             f_b = self.executor.submit(self.model_b.predict, X_ab)
@@ -70,7 +70,7 @@ class MLEngine:
             raw_behaviour = int(f_a.result()[0])
             raw_academic = int(f_b.result()[0])
 
-            # Decode labels
+            # decode labels
             if self.label_encoder_a is not None:
                 behaviour_label = self.label_encoder_a.inverse_transform([raw_behaviour])[0]
             else:
@@ -84,40 +84,41 @@ class MLEngine:
 
             packet_count = features_cd_dict.get("packet_count", 0)
             final_attack = 0
-            # Base attack detection (strict)
+
+            # base attack detection (strict)
             if attack_confidence > 0.95 and packet_count > 50:
                 final_attack = 1
 
-            # ------- POST-PROCESSING RULES (to reduce false positives) -------
+            # post-processing rules (to reduce false positives)
             domain = metadata.get("source", "") if metadata else ""
             domain_lower = domain.lower() if domain else ""
 
-            # 1. If domain is in safe list, force attack=0 and academic=0
+            # 1. if domain is in safe list, force attack = 0 and academic = 0
             safe_domains = ['google', 'youtube', 'github', 'ieee', 'springer', 'sciencedirect', 
                             'researchgate', 'stackoverflow', 'w3schools', 'coursera', 'zoom', 'teams']
             if any(sd in domain_lower for sd in safe_domains):
                 if final_attack == 1:
                     logger.info(f"[ML] Override attack=1 -> 0 for safe domain: {domain}")
                     final_attack = 0
-                # For safe domains, we keep academic as is (they might be academic sites)
-                # but if we want to reduce priority for non-academic safe domains, we can set academic=0 here.
-                # However, we'll leave it to policy engine to decide.
+                # for safe domains, keep academic as is (they might be academic sites)
+                # if to reduce priority for non-academic safe domains, set academic = 0
+                # final leave to policy engine to decide
 
-            # 2. If domain is unknown (IP address) and ML says academic=1, force academic=0
+            # 2. If domain is unknown (IP address) and ML says academic = 1, force academic = 0
             if (not domain or domain == "unknown") and academic == 1:
                 logger.info(f"[ML] Override academic=1 -> 0 for unknown IP flow")
                 academic = 0
 
-            # 3. If packet count is low (< 30), reduce attack confidence (already covered by threshold)
-            # 4. If confidence is moderate but attack flag is set, double-check with behaviour
+            # 3. if packet count is lower than 30, reduce attack confidence (already covered by threshold)
+            # 4. if confidence is moderate but attack flag is set, double-check with behaviour
             if final_attack == 1 and attack_confidence < 0.98 and packet_count < 100:
                 logger.info(f"[ML] Suppress attack due to moderate confidence and low packets: conf={attack_confidence:.2f}, pkts={packet_count}")
                 final_attack = 0
 
-            # 5. If behaviour is "media" or "chat" and academic=1 but domain doesn't look academic, force academic=0
-            # This helps prevent YouTube, Spotify etc. from getting academic priority.
+            # 5. if behaviour is "media" or "chat" and academic = 1 but domain doesnt look academic, force academic = 0
+            # prevent streaming from getting academic priority
             if academic == 1 and behaviour_label in ["media", "chat"]:
-                # Check if domain contains academic keywords (simple list)
+                # check if domain contains academic keywords (simple list)
                 academic_keywords = ['.edu', 'ieee', 'springer', 'sciencedirect', 'researchgate', 'scholar', 'arxiv', 'coursera']
                 if not any(kw in domain_lower for kw in academic_keywords):
                     logger.info(f"[ML] Override academic=1 -> 0 for media/chat flow without academic domain: {domain}")
