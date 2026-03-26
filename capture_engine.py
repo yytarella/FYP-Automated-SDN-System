@@ -245,8 +245,9 @@ class CaptureEngine:
             dst_port = flow["original"]["dport"]  # already int
             is_attack_port = dst_port in self.attack_ports
             is_low_port_without_domain = (dst_port < 1024) and not has_domain
+            is_web_without_domain = (dst_port in {80, 443}) and not has_domain
 
-            if total_pkts >= self.min_packets and duration >= 2.0 and (has_domain or is_attack_port or is_low_port_without_domain):
+            if total_pkts >= self.min_packets and duration >= 2.0 and (has_domain or is_attack_port or is_low_port_without_domain or is_web_without_domain):
                 stats = self.build_stats(flow)
                 domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
                 metadata = {

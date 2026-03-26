@@ -103,16 +103,24 @@ class QoSPolicyEngine:
 
         # ---- 4. ATTACK HANDLING (strict for non-safe domains) ----
         if is_attack == 1:
-            # Block only if high confidence and enough packets
-            if packet_count >= 100 and confidence >= 0.99:
-                logger.warning(f"[POLICY] Verified attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
+            # Immediate block for high confidence attacks, regardless of packet count
+            if confidence >= 0.99:
+                logger.warning(f"[POLICY] Verified high-confidence attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
                 return {
                     "action": "BLOCK",
                     "priority": "NONE",
-                    "reason": f"Verified Threat (Conf: {confidence:.3f})"
+                    "reason": f"High-confidence attack (Conf: {confidence:.3f})"
+                }
+            # For lower confidence but still high, require some packets to confirm
+            elif confidence >= 0.95 and packet_count >= 30:
+                logger.warning(f"[POLICY] Verified moderate-confidence attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
+                return {
+                    "action": "BLOCK",
+                    "priority": "NONE",
+                    "reason": f"Moderate-confidence attack (Conf: {confidence:.3f})"
                 }
             else:
-                logger.info(f"[POLICY] Attack suppressed (immature/low confidence): {final_source}")
+                logger.info(f"[POLICY] Attack suppressed (confidence {confidence:.3f} too low or packet count {packet_count} insufficient): {final_source}")
                 is_attack = 0  # continue to allow
 
         # ---- 5. QOS SCORING (if not blocked) ----
