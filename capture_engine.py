@@ -37,7 +37,7 @@ class CaptureEngine:
         self.attack_ports = {21, 22, 23, 25, 80, 443, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555, 8080, 8443}
         
         self.flow_timeout = 300 # 5 minutes inactivity cleanup
-        self.cleanup_interval() = 60 # run cleanup every 60 seconds
+        self.cleanup_interval = 60 # run cleanup every 60 seconds
         # lock for thread-safe access to shared dictionaries
         self.lock = threading.Lock()
         self._start_flow_cleanup()
@@ -283,7 +283,9 @@ class CaptureEngine:
                     "is_academic": self.is_academic(domain_name),
                     "src_port": flow["original"]["sport"],
                     "dst_port": flow["original"]["dport"],
-                    "proto": flow["original"]["proto"]
+                    "proto": flow["original"]["proto"],
+                    "src_ip": flow["original"]["src"],   
+                    "dst_ip": flow["original"]["dst"] 
                 }
 
                 callback(
