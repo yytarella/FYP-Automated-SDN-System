@@ -25,10 +25,10 @@ class TrafficShaper:
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
-        total_rate = 100000   # adjust to your link speed (kbit)
-        high_rate = 50000
-        medium_rate = 30000
-        low_rate = 10000
+        total_rate = 10000   # adjust to your link speed (kbit)
+        high_rate = 8000
+        medium_rate = 1500
+        low_rate = 500
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit", shell=True)
@@ -55,21 +55,21 @@ class TrafficShaper:
         return result.returncode == 0
 
     def block_flow(self, metadata):
-        src_ip = metadata.get("src_ip")
         dst_ip = metadata.get("dst_ip")
-        src_port = metadata.get("src_port")
         dst_port = metadata.get("dst_port")
         proto = metadata.get("proto", "").lower()
-        if not all([src_ip, dst_ip, src_port, dst_port, proto]):
-            logger.warning("Missing flow info for block rule")
+        
+        if not all([dst_ip, dst_port, proto]):
+            logger.warning("Missing dst info for block rule")
             return
-        check_cmd = (f"iptables -C FORWARD -p {proto} -s {src_ip} -d {dst_ip} "
-                     f"--sport {src_port} --dport {dst_port} -j DROP")
+        
+        # block all traffic to this destination IP and port (any source)
+        check_cmd = (f"iptables -C FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP")
+        
         if not self._rule_exists(check_cmd):
-            rule = (f"iptables -I FORWARD -p {proto} -s {src_ip} -d {dst_ip} "
-                    f"--sport {src_port} --dport {dst_port} -j DROP")
+            rule = (f"iptables -I FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP")
             subprocess.run(rule, shell=True)
-            logger.info(f"Added block rule for {proto} {src_ip}:{src_port} -> {dst_ip}:{dst_port}")
+            logger.info(f"Added block rule for {proto} to {dst_ip}:{dst_port}")
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
