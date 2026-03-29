@@ -13,9 +13,9 @@ class TrafficShaper:
     def setup(self):
         self._clear_iptables()
         self._setup_htb()
-        # Verify classes exist
+        self._setup_filters()
         self._verify_htb_classes()
-        logger.info("QoS base configuration applied (HTB with 3 classes).")
+        logger.info("QoS base configuration applied (HTB with fwmark filters).")
 
     def _clear_iptables(self):
         subprocess.run(f"iptables -t mangle -F {self.chain} 2>/dev/null", shell=True)
@@ -25,7 +25,7 @@ class TrafficShaper:
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
-        total_rate = 100000
+        total_rate = 100000   # adjust to your link speed (kbit)
         high_rate = 50000
         medium_rate = 30000
         low_rate = 10000
@@ -35,11 +35,14 @@ class TrafficShaper:
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:10 handle 10: pfifo limit 1000", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:20 handle 20: pfifo limit 1000", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:30 handle 30: pfifo limit 1000", shell=True)
+
+    def _setup_filters(self):
+        for mark, classid in [(10, "1:10"), (20, "1:20"), (30, "1:30")]:
+            subprocess.run(f"tc filter add dev {self.iface} parent 1: protocol all prio 1 handle {mark} fw classid {classid}", shell=True)
         subprocess.run(f"iptables -t mangle -N {self.chain}", shell=True)
         subprocess.run(f"iptables -t mangle -I PREROUTING -j {self.chain}", shell=True)
 
     def _verify_htb_classes(self):
-        """Check if tc classes exist, wait briefly if not."""
         for _ in range(5):
             result = subprocess.run(f"tc class show dev {self.iface} | grep -q 'class htb 1:10'", shell=True)
             if result.returncode == 0:
@@ -70,7 +73,6 @@ class TrafficShaper:
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
-        class_id = f"1:{mark_value}"
         src_ip = metadata.get("src_ip")
         dst_ip = metadata.get("dst_ip")
         src_port = metadata.get("src_port")
@@ -80,7 +82,7 @@ class TrafficShaper:
             logger.warning("Missing flow info for QoS marking")
             return
 
-        # Check and add CONNMARK rule
+        # Mark connection
         check_mark = (f"iptables -t mangle -C {self.chain} -p {proto} -s {src_ip} -d {dst_ip} "
                       f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
         if not self._rule_exists(check_mark):
@@ -88,18 +90,15 @@ class TrafficShaper:
                          f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
             subprocess.run(mark_rule, shell=True)
 
-        # Check and add CLASSIFY rule
-        check_classify = (f"iptables -t mangle -C {self.chain} -m connmark --mark {mark_value} "
-                          f"-j CLASSIFY --set-class {class_id}")
-        if not self._rule_exists(check_classify):
-            classify_rule = (f"iptables -t mangle -A {self.chain} -m connmark --mark {mark_value} "
-                             f"-j CLASSIFY --set-class {class_id}")
-            # Catch errors and log them
-            result = subprocess.run(classify_rule, shell=True, capture_output=True)
-            if result.returncode != 0:
-                logger.error(f"Failed to add CLASSIFY rule: {result.stderr.decode().strip()}")
-            else:
-                logger.info(f"QoS rule added for {proto} {src_ip}:{src_port} -> {dst_ip}:{dst_port} -> {priority} (class {class_id})")
+        # Restore mark to each packet (so tc filter can see it)
+        restore_rule = (f"iptables -t mangle -A {self.chain} -m connmark --mark {mark_value} "
+                        f"-j CONNMARK --restore-mark")
+        check_restore = (f"iptables -t mangle -C {self.chain} -m connmark --mark {mark_value} "
+                         f"-j CONNMARK --restore-mark")
+        if not self._rule_exists(check_restore):
+            subprocess.run(restore_rule, shell=True)
+
+        logger.info(f"QoS marking added for {proto} {src_ip}:{src_port} -> {dst_ip}:{dst_port} -> {priority} (mark {mark_value})")
 
     def cleanup(self):
         subprocess.run(f"iptables -t mangle -F {self.chain}", shell=True)

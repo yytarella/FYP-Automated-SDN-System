@@ -267,6 +267,29 @@ class CaptureEngine:
             is_attack_port = dst_port in self.attack_ports
             is_low_port_without_domain = (dst_port < 1024) and not has_domain
             is_web_without_domain = (dst_port in {80, 443}) and not has_domain
+            
+            # immediate handling for attack ports (no packet count delay)
+            if is_attack_port and not flow["processed"]:
+                stats = self.build_stats(flow)
+                domain_name = flow.get("host") or self.ip_domain_map.get(key[1], "unknown")
+                metadata = {
+                    "source": domain_name,
+                    "mapped_domain": domain_name,
+                    "flow_packet_count": total_pkts,
+                    "is_academic": self.is_academic(domain_name),
+                    "src_port": flow["original"]["sport"],
+                    "dst_port": flow["original"]["dport"],
+                    "proto": flow["original"]["proto"],
+                    "src_ip": flow["original"]["src"],
+                    "dst_ip": flow["original"]["dst"]
+                }
+                callback(
+                    self.build_features_1cd(stats),
+                    self.build_features_1ab(stats),
+                    metadata
+                )
+                flow["processed"] = True
+                return
 
             # determine required packet threshold based on flow type
             required_packets = self.min_packets
