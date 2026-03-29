@@ -67,6 +67,7 @@ class QoSSystem:
                 logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')}")
             
             else:
+                print(f"[REAL-TIME] {metadata.get('source', 'unknown')} -> {decision['priority']} (score={decision['score']})")
                 # log normal flow to main logger
                 logger.info(
                     f"[FLOW] {metadata.get('source', 'unknown')} | "

@@ -24,17 +24,20 @@ class TrafficShaper:
 
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
-        subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
+        
         total_rate = 100000   # adjust to your link speed (kbit)
         high_rate = 65000
-        medium_rate = 25000
+        medium_rate = 20000
         low_rate = 2000
-        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit", shell=True)
-        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit", shell=True)
-        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit", shell=True)
+        
+        subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
+        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
+        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit prio 1", shell=True)
+        subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit prio 2", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:10 handle 10: pfifo limit 1000", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:20 handle 20: pfifo limit 1000", shell=True)
         subprocess.run(f"tc qdisc add dev {self.iface} parent 1:30 handle 30: pfifo limit 1000", shell=True)
+        
 
     def _setup_filters(self):
         for mark, classid in [(10, "1:10"), (20, "1:20"), (30, "1:30")]:
@@ -58,18 +61,28 @@ class TrafficShaper:
         dst_ip = metadata.get("dst_ip")
         dst_port = metadata.get("dst_port")
         proto = metadata.get("proto", "").lower()
-        
+        src_ip = metadata.get("src_ip")
+
         if not all([dst_ip, dst_port, proto]):
             logger.warning("Missing dst info for block rule")
             return
         
-        # block all traffic to this destination IP and port (any source)
+        # 1. add drop rule (any source)
         check_cmd = (f"iptables -C FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP")
-        
         if not self._rule_exists(check_cmd):
             rule = (f"iptables -I FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP")
             subprocess.run(rule, shell=True)
             logger.info(f"Added block rule for {proto} to {dst_ip}:{dst_port}")
+
+        # 2. kill existing conntrack entries to force immediate block
+        if src_ip:
+            conntrack_cmd = f"conntrack -D -p {proto} -d {dst_ip} --dport {dst_port} -s {src_ip}"
+        
+        else:
+            conntrack_cmd = f"conntrack -D -p {proto} -d {dst_ip} --dport {dst_port}"
+        
+        subprocess.run(conntrack_cmd, shell=True, stderr=subprocess.DEVNULL)
+        logger.info(f"Killed existing conntrack entries for {proto} to {dst_ip}:{dst_port}")
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
