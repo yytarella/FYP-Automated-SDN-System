@@ -25,10 +25,10 @@ class TrafficShaper:
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         
-        total_rate = 200000   # adjust to your link speed (kbit)
-        high_rate = 150000
+        total_rate = 250000   # adjust to your link speed (kbit)
+        high_rate = 180000
         medium_rate = 30000
-        low_rate = 2000
+        low_rate = 1000
         
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
