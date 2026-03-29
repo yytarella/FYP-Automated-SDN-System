@@ -25,19 +25,18 @@ class TrafficShaper:
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         
-        total_rate = 100000   # adjust to your link speed (kbit)
-        high_rate = 65000
-        medium_rate = 20000
+        total_rate = 200000   # adjust to your link speed (kbit)
+        high_rate = 150000
+        medium_rate = 30000
         low_rate = 2000
         
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit prio 1", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit prio 2", shell=True)
-        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:10 handle 10: pfifo limit 1000", shell=True)
-        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:20 handle 20: pfifo limit 1000", shell=True)
-        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:30 handle 30: pfifo limit 1000", shell=True)
-        
+        subprocess.run(f"tc qdisc add dev ens37 parent 1:10 handle 10: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev ens37 parent 1:20 handle 20: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev ens37 parent 1:30 handle 30: fq_codel", shell=True)       
 
     def _setup_filters(self):
         for mark, classid in [(10, "1:10"), (20, "1:20"), (30, "1:30")]:
@@ -74,6 +73,15 @@ class TrafficShaper:
             subprocess.run(rule, shell=True)
             logger.info(f"Added block rule for {proto} to {dst_ip}:{dst_port}")
 
+        # 2. block source ip if detected
+        if src_ip:
+            check_ip = f"iptables -C FORWARD -s {src_ip} -j DROP"
+
+        if not self._rule_exists(check_ip):
+            subprocess.run(f"iptables -I FORWARD 1 -s {src_ip} -j DROP", shell=True)
+            subprocess.run(f"iptables -I INPUT 1 -s {src_ip} -j DROP", shell=True)
+            logger.warning(f"[BLOCK-IP] Attacker {src_ip} fully blocked")
+
         # 2. kill existing conntrack entries to force immediate block
         if src_ip:
             conntrack_cmd = f"conntrack -D -p {proto} -d {dst_ip} --dport {dst_port} -s {src_ip}"
@@ -83,6 +91,14 @@ class TrafficShaper:
         
         subprocess.run(conntrack_cmd, shell=True, stderr=subprocess.DEVNULL)
         logger.info(f"Killed existing conntrack entries for {proto} to {dst_ip}:{dst_port}")
+
+        # 4. user-friendly message
+        print("\n=================ATTACK BLOCKED=================")
+        print(f"Source (Attacker): {src_ip}")
+        print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
+        print("Action: BLOCKED + CONNECTION TERMINATED")
+        print("Logs saved to: /var/log/qos_system/attacks.log")
+        print("=======================================================\n")
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
