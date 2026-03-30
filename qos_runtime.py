@@ -53,9 +53,7 @@ class QoSRuntime:
         return final_decision
 
     def fast_pass(self, domain, reason):
-        """
-        Quickly allow traffic for academic or early stage flows
-        """
+        # quickly allow traffic for academic or early stage flows
         priority = "MEDIUM"
         if self.policy.is_academic_domain(domain):
             priority = "HIGH"

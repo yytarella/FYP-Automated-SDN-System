@@ -5,8 +5,9 @@ import time
 logger = logging.getLogger(__name__)
 
 class TrafficShaper:
-    def __init__(self, iface='ens37'):
+    def __init__(self, iface='ens37', log_dir = "var/log/qos_system"):
         self.iface = iface
+        self.log_dir = log_dir
         self.prio_map = {"HIGH": 10, "MEDIUM": 20, "LOW": 30}
         self.chain = "QOS"
 
@@ -18,24 +19,26 @@ class TrafficShaper:
         logger.info("QoS base configuration applied (HTB with fwmark filters).")
 
     def _clear_iptables(self):
+        # clear root iptables
         subprocess.run(f"iptables -t mangle -F {self.chain} 2>/dev/null", shell=True)
         subprocess.run(f"iptables -t mangle -D PREROUTING -j {self.chain} 2>/dev/null", shell=True)
         subprocess.run(f"iptables -t mangle -X {self.chain} 2>/dev/null", shell=True)
 
     def _setup_htb(self):
+        # hierarchical token bucket set up
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         
-        total_rate = 250000   # adjust to your link speed (kbit)
-        high_rate = 180000
-        medium_rate = 30000
-        low_rate = 1000
+        total_rate = 250000   # adjust link speed (kbit)
+        high_rate = 180000 # for HIGH prior
+        medium_rate = 30000 # for MEDIUM prior
+        low_rate = 1000 # for LOW prior
         
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit prio 1", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit prio 2", shell=True)
-        subprocess.run(f"tc qdisc add dev ens37 parent 1:10 handle 10: fq_codel", shell=True)
-        subprocess.run(f"tc qdisc add dev ens37 parent 1:20 handle 20: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev ens37 parent 1:10 handle 10: fq_codel", shell=True) # use fq_codel to distribute bandwidth
+        subprocess.run(f"tc qdisc add dev ens37 parent 1:20 handle 20: fq_codel", shell=True) # avoid bufferbloat
         subprocess.run(f"tc qdisc add dev ens37 parent 1:30 handle 30: fq_codel", shell=True)       
 
     def _setup_filters(self):
@@ -47,10 +50,12 @@ class TrafficShaper:
     def _verify_htb_classes(self):
         for _ in range(5):
             result = subprocess.run(f"tc class show dev {self.iface} | grep -q 'class htb 1:10'", shell=True)
+            
             if result.returncode == 0:
                 return
+
             time.sleep(0.1)
-        logger.warning("HTB classes not found, QoS may not work properly")
+        logger.warning("HTB classes not found, QoS may not work properly.")
 
     def _rule_exists(self, rule_cmd):
         result = subprocess.run(rule_cmd, shell=True, capture_output=True)
@@ -97,8 +102,8 @@ class TrafficShaper:
         print(f"Source (Attacker): {src_ip}")
         print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
         print("Action: BLOCKED + CONNECTION TERMINATED")
-        print("Logs saved to: /var/log/qos_system/attacks.log")
-        print("=======================================================\n")
+        print(f"Logs saved to: {self.log_dir}/attacks.log")
+        print("===================================================\n")
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
@@ -111,7 +116,7 @@ class TrafficShaper:
             logger.warning("Missing flow info for QoS marking")
             return
 
-        # Mark connection
+        # mark connection
         check_mark = (f"iptables -t mangle -C {self.chain} -p {proto} -s {src_ip} -d {dst_ip} "
                       f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
         if not self._rule_exists(check_mark):
@@ -119,7 +124,7 @@ class TrafficShaper:
                          f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
             subprocess.run(mark_rule, shell=True)
 
-        # Restore mark to each packet (so tc filter can see it)
+        # restore mark to each packet (so tc filter can see it)
         restore_rule = (f"iptables -t mangle -A {self.chain} -m connmark --mark {mark_value} "
                         f"-j CONNMARK --restore-mark")
         check_restore = (f"iptables -t mangle -C {self.chain} -m connmark --mark {mark_value} "

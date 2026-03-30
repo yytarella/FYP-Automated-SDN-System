@@ -8,7 +8,9 @@ from traffic_shaper import TrafficShaper
 
 # logging setup
 # create log directory (requires root for /var/log)
-LOG_DIR = "/var/log/qos_system"
+BASE_LOG_DIR = "/var/log/qos_system"
+timestamp = time.strftime("%Y%m%d_%H%M%S")
+LOG_DIR = os.path.join(BASE_LOG_DIR, f"run_{timestamp}")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # main logger
@@ -91,6 +93,7 @@ class QoSSystem:
 
     def run(self):
         logger.info("Starting QoS ML System...")
+        logger.info(f"Logging session directory: {LOG_DIR}")
         
         try:
             self.capture_engine.capture(self.process_flow)
