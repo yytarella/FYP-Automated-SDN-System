@@ -17,10 +17,10 @@ class QoSPolicyEngine:
             ".edu", ".ac.", ".gov", "university", "college", "campus", "library",
             "moodle", "blackboard", "canvas", "ieee", "springer",
             "sciencedirect", "researchgate", "scholar", "arxiv", "github",
-            "stackoverflow", "w3schools", "coursera", "zoom", "teams", 
+            "stackoverflow", "w3schools", "coursera", "zoom", "zoom.us" "teams", "teams.live", 
             'google-classroom', 'scopus', 'library', 'thesis', 'conference',
             'journal', 'journals', 'mdpi', 'college', 'nature', 'science', 'mendeley',
-            'article', 'meet.google', 'colab'
+            'article', 'meet.google', 'colab', "mail.google"
         ]
 
         self.global_safe_list = [
