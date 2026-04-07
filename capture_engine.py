@@ -61,7 +61,7 @@ class CaptureEngine:
             if hasattr(pkt, "http") and hasattr(pkt.http, "host"):
                 host = str(pkt.http.host)
             elif hasattr(pkt, "tls") and hasattr(pkt.tls, "handshake_extensions_server_name"):
-                host = str(pkt.tls.handshake_extensions_server_name)
+                host = str(pkt.tls.handshake_extensions_server_name) # finding SNI
             elif hasattr(pkt, "dns") and hasattr(pkt.dns, "a"):
                 query_name = pkt.dns.qry_name
                 resolved_ip = pkt.dns.a
