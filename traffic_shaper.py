@@ -28,10 +28,10 @@ class TrafficShaper:
         # hierarchical token bucket set up
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
         
-        total_rate = 250000   # adjust link speed (kbit)
-        high_rate = 180000 # for HIGH prior
+        total_rate = 400000   # adjust link speed (kbit)
+        high_rate = 350000 # for HIGH prior
         medium_rate = 30000 # for MEDIUM prior
-        low_rate = 1000 # for LOW prior
+        low_rate = 20000 # for LOW prior
         
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
