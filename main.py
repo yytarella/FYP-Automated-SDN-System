@@ -61,18 +61,19 @@ class QoSSystem:
             )
 
             if decision["action"] == "BLOCK":
-                # Extract the block granularity (default to 'source' for backward compatibility)
-                block_type = decision.get("block_type", "source")
-                attack_logger.info(f"BLOCKED {metadata.get('source', 'unknown')} | {decision.get('reason', 'Attack')} | mode={block_type}")
-                # Apply block with the selected mode
-                self.traffic_shaper.block_flow(metadata, block_mode=block_type)
-                logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')} | mode={block_type}")
+                # Extract block_source flag (default True to preserve original behaviour)
+                block_source = decision.get("block_source", True)
+                attack_logger.info(f"BLOCKED {metadata.get('source', 'unknown')} | {decision.get('reason', 'Attack')}")
+                # Pass the flag to traffic_shaper
+                self.traffic_shaper.block_flow(metadata, block_source=block_source)
+                logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')}")
+            
             else:
                 # Normal flow handling (QoS marking)
                 print(f"[REAL-TIME] {metadata.get('source', 'unknown')} -> {decision['priority']} (score={decision['score']})")
                 logger.info(...)   # existing logging
                 self.traffic_shaper.mark_flow(metadata, decision["priority"])
-                
+
         except Exception as e:
             logger.error(f"Pipeline error: {e}", exc_info=True)
 

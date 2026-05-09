@@ -56,11 +56,11 @@ class TrafficShaper:
         result = subprocess.run(rule_cmd, shell=True, capture_output=True)
         return result.returncode == 0
 
-    def block_flow(self, metadata, block_mode="source"):
+    def block_flow(self, metadata, block_source=True):
         """
-        Block a flow with two possible modes:
-        - 'flow'   : drop only packets matching dst_ip+dst_port (connection level)
-        - 'source' : additionally block the source IP completely
+        Block a malicious flow.
+        - block_source=True  : original behaviour: block source IP entirely
+        - block_source=False : drop only the specific flow (dst IP+port), keep source IP free
         """
         dst_ip = metadata.get("dst_ip")
         dst_port = metadata.get("dst_port")
@@ -71,37 +71,40 @@ class TrafficShaper:
             logger.warning("Missing dst info for block rule")
             return
 
-        # 1. Always add a rule that drops the specific flow (destination IP+port)
+        # 1. Always add a flow‑specific drop rule (drop packets to dst_ip:dst_port)
         flow_rule = f"iptables -I FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP"
         check_flow = f"iptables -C FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP"
         if not self._rule_exists(check_flow):
             subprocess.run(flow_rule, shell=True)
             logger.info(f"Added flow block rule for {proto} to {dst_ip}:{dst_port}")
 
-        # 2. If block_mode is 'source', also block the source IP entirely
-        if block_mode == "source" and src_ip:
+        # 2. If block_source is True, also add source IP based rules (original behaviour)
+        if block_source and src_ip:
             check_ip = f"iptables -C FORWARD -s {src_ip} -j DROP"
             if not self._rule_exists(check_ip):
                 subprocess.run(f"iptables -I FORWARD 1 -s {src_ip} -j DROP", shell=True)
                 subprocess.run(f"iptables -I INPUT 1 -s {src_ip} -j DROP", shell=True)
                 logger.warning(f"[BLOCK-IP] Attacker {src_ip} fully blocked")
-                print(f"\nSource IP {src_ip} blocked due to malicious activity.\n")
+                # Original console output (kept exactly as before)
+                print("\n=================ATTACK BLOCKED=================")
+                print(f"Source (Attacker): {src_ip}")
+                print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
+                print("Action: BLOCKED + CONNECTION TERMINATED")
+                print(f"Logs saved to: {self.log_dir}/attacks.log")
+                print("===================================================\n")
+        else:
+            print("\n=================FLOW DROPPED=================")
+            print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
+            print("Action: FLOW DROPPED (source IP not blocked)")
+            print(f"Logs saved to: {self.log_dir}/attacks.log")
+            print("================================================\n")
 
-        # 3. Kill existing conntrack entries to enforce the block immediately
+        # 3. Kill conntrack entries (always do this)
         conntrack_cmd = f"conntrack -D -p {proto} -d {dst_ip} --dport {dst_port}"
-        if src_ip:
+        if src_ip and block_source:
             conntrack_cmd += f" -s {src_ip}"
         subprocess.run(conntrack_cmd, shell=True, stderr=subprocess.DEVNULL)
         logger.info(f"Killed conntrack entries for {proto} to {dst_ip}:{dst_port}")
-
-        # 4. User-friendly console output
-        print("\n================= ATTACK BLOCKED =================")
-        print(f"Source (Attacker): {src_ip if src_ip else 'unknown'}")
-        print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
-        print(f"Block mode: {block_mode.upper()}")
-        print(f"Action: {'SOURCE IP BLOCKED' if block_mode=='source' else 'FLOW DROPPED'} + CONNECTION TERMINATED")
-        print(f"Logs saved to: {self.log_dir}/attacks.log")
-        print("===================================================\n")
 
     def mark_flow(self, metadata, priority):
         mark_value = self.prio_map.get(priority, 30)
