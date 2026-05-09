@@ -34,9 +34,9 @@ class QoSPolicyEngine:
             'aws', 'whatsapp', 'tiktok', 'dropbox', 'twitter', 'outlook', 'gmail'
         ]
 
-        # Ports that are often used for attacks (but not all will trigger source block)
+        # Ports that are often used for attacks (only these will trigger immediate block)
         self.attack_ports = {21, 22, 23, 25, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555}
-        # Web ports – treat carefully to avoid false IP blocks
+        # Web ports - never block based on port alone, let QoS/ML decide
         self.web_ports = {80, 443, 8080, 8443}
 
     def is_academic_domain(self, source):
@@ -93,10 +93,9 @@ class QoSPolicyEngine:
                 "source_identified": final_source
             }
 
-        # 2. Immediate port‑based blocking (unconditional, before ML)
-        # Dangerous ports that require full source IP block
-        dangerous_for_source = {21,22,23,25,445,139,135,1433,3306,5432,6667,31337,4444,5555}
-        if dst_port in dangerous_for_source:
+        # 2. Immediate port-based blocking (only for truly dangerous ports)
+        # These ports are rarely used for legitimate traffic and are common attack vectors.
+        if dst_port in self.attack_ports:
             logger.warning(f"[POLICY] Attack port {dst_port} from {final_source} -> BLOCK (source)")
             return {
                 "action": "BLOCK",
@@ -105,16 +104,9 @@ class QoSPolicyEngine:
                 "reason": f"Attack port {dst_port}",
                 "source_identified": final_source
             }
-        # Web ports (including 8080,8443) – block only the flow, never the source IP
-        elif dst_port in self.web_ports and not has_domain:
-            logger.warning(f"[POLICY] Suspicious web port {dst_port} from {final_source} -> BLOCK (flow only)")
-            return {
-                "action": "BLOCK",
-                "block_type": "flow",
-                "priority": "NONE",
-                "reason": f"Suspicious port {dst_port} (flow blocked)",
-                "source_identified": final_source
-            }
+
+        # NOTE: Web ports (80,443,8080,8443) are NOT blocked here, even without a domain.
+        # They will be handled by QoS/ML logic below.
 
         # 3. Academic identification (only for named domains, never for raw IPs)
         if final_source == "unknown":
@@ -126,7 +118,7 @@ class QoSPolicyEngine:
 
         # 4. Attack handling (ML based)
         if is_attack == 1:
-            # For web ports: flow block only, even if ML says attack
+            # For web ports: flow block only, even if ML says attack (to avoid IP blocking)
             if is_web_port:
                 if confidence >= 0.95 and packet_count >= 100:
                     logger.warning(f"[POLICY] High confidence attack on web port {dst_port}, using FLOW block: {final_source}")
