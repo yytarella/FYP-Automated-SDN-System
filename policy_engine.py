@@ -17,7 +17,7 @@ class QoSPolicyEngine:
             ".edu", ".ac.", ".gov", "university", "college", "campus", "library",
             "moodle", "blackboard", "canvas", "ieee", "springer",
             "sciencedirect", "researchgate", "scholar", "arxiv", "github",
-            "stackoverflow", "w3schools", "coursera", "zoom", "zoom.us" "teams", "teams.live", 
+            "stackoverflow", "w3schools", "coursera", "zoom", "zoom.us", "teams", "teams.live",
             'google-classroom', 'scopus', 'library', 'thesis', 'conference',
             'journal', 'journals', 'mdpi', 'college', 'nature', 'science', 'mendeley',
             'article', 'meet.google', 'colab', "mail.google"
@@ -34,10 +34,12 @@ class QoSPolicyEngine:
             'aws', 'whatsapp', 'tiktok', 'dropbox', 'twitter', 'outlook', 'gmail'
         ]
 
-        # known safe ports (common services)
+        # Known attack ports – used ONLY as a SUSPICIOUS FEATURE, not decisive alone.
+        self.attack_ports = {21, 22, 23, 25, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555}
+        # Safe/common ports (no forced action, but may affect decision thresholds)
         self.safe_ports = {80, 443, 53, 123, 993, 995, 22, 3389}
-        # known attack ports (to block)
-        self.attack_ports = {21, 22, 23, 25, 445, 139, 135, 1433, 3306, 5432, 6667, 31337, 4444, 5555, 8080, 8443}
+        # Web ports (80,443,8080,8443) – treat with extra care to avoid false IP blocks
+        self.web_ports = {80, 443, 8080, 8443}
 
     def is_academic_domain(self, source):
         if not source or source == "unknown":
@@ -63,40 +65,35 @@ class QoSPolicyEngine:
             score += self.weights["interactive"]
         return score
 
+    def _block(self, block_type, reason, metadata):
+        """Helper to create a BLOCK decision with a specific granularity.
+        block_type: 'flow' – drop only this connection (dst IP+port)
+                    'source' – block the source IP entirely
+        """
+        return {
+            "action": "BLOCK",
+            "block_type": block_type,
+            "priority": "NONE",
+            "reason": reason,
+            "source_identified": metadata.get("src_ip", "unknown")
+        }
+
     def decide(self, ml_result, source=None, metadata=None):
-        # extract context
+        # Extract context
         mapped_domain = metadata.get("mapped_domain", "unknown") if metadata else "unknown"
         packet_count = metadata.get("flow_packet_count", 0) if metadata else 0
         is_attack = ml_result.get("attack", 0)
         confidence = ml_result.get("confidence", 0.0)
         dst_port = metadata.get("dst_port", 0) if metadata else 0
+        src_ip = metadata.get("src_ip")
+        proto = metadata.get("proto", "")
 
         final_source = str(source if source and source != "unknown" else mapped_domain).lower()
+        has_domain = (final_source != "unknown" and not all(c.isdigit() or c == '.' for c in final_source))
+        is_web_port = dst_port in self.web_ports
+        is_suspicious_port = dst_port in self.attack_ports
 
-        # 1. port-based attack detection (direct block) 
-        if dst_port in self.attack_ports:
-            logger.warning(f"[POLICY] Known attack port {dst_port} from {final_source} -> BLOCK")
-            return {
-                "action": "BLOCK",
-                "priority": "NONE",
-                "reason": f"Attack port {dst_port}",
-                "source_identified": final_source
-            }
-        
-        # 2. web scan detection (ports 80/443 & no domain)
-        # check if source is an IP address (when no domain)
-        is_ip_source = final_source == "unknown" or all(c.isdigit() or c == '.' for c in final_source)
-        
-        if dst_port in {80, 443} and is_ip_source:
-            if ml_result.get("attack", 0) == 1 or packet_count >= 50:
-                logger.warning(f"[POLICY] Suspicious web traffic (IP only) from {final_source} -> BLOCK")
-                return {
-                    "action": "BLOCK",
-                    "priority": "NONE",
-                    "reason": "Web scan without domain"
-                }
-
-        # 3. safe domain checking (always allow)
+        # 1. Safe domain list always allowed
         is_safe_domain = any(kw in final_source for kw in self.global_safe_list)
         if is_safe_domain:
             if is_attack == 1:
@@ -112,60 +109,56 @@ class QoSPolicyEngine:
                 "source_identified": final_source
             }
 
-        # 4. academic identification for non safe domains
-        # for unknown sources, never trust ML academic result (avoid IP flows gaining priority)
+        # 2. Academic identification (only for named domains, never for raw IPs)
         if final_source == "unknown":
             final_academic_status = False
-        
         else:
             is_edu_domain = self.is_academic_domain(final_source)
             is_edu_ml = ml_result.get("academic", 0) == 1
             final_academic_status = is_edu_domain or is_edu_ml
 
-        # 5. attack handling (distinguish domain vs IP)
+        # 3. Attack handling – no unconditional port block!
         if is_attack == 1:
-            # check if flow has a domain name (not an IP address)
-            has_domain = (final_source != "unknown" and not all(c.isdigit() or c == '.' for c in final_source))
-            
-            if has_domain:
-                # for flows with domain names (normal web, academic), require very high confidence
-                # and enough packets to avoid blocking during handshake phase
-                if confidence >= 0.999 and packet_count >= 100:
-                    logger.warning(f"[POLICY] Verified high-confidence domain attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
-                    return {
-                        "action": "BLOCK",
-                        "priority": "NONE",
-                        "reason": f"Domain-based threat (Conf: {confidence:.3f})"
-                    }
+            # For web ports, be extremely conservative: even high confidence -> flow block, not source block
+            if is_web_port:
+                if confidence >= 0.95 and packet_count >= 100:
+                    logger.warning(f"[POLICY] High confidence attack on web port {dst_port}, but using FLOW block (no IP block): {final_source}")
+                    return self._block("flow", f"High-confidence web threat (conf={confidence:.2f})", metadata)
+                elif confidence >= 0.80:
+                    # Still suspicious – drop only the flow
+                    logger.info(f"[POLICY] Medium confidence web attack -> flow block: {final_source}")
+                    return self._block("flow", f"Medium-confidence web attack (conf={confidence:.2f})", metadata)
                 else:
-                    # suppress the attack flag & treat as false positive (handshake phase)
-                    logger.info(f"[POLICY] Attack flag suppressed for domain flow (conf={confidence:.3f}, pkts={packet_count}): {final_source}")
-                    is_attack = 0
-            else:
-                # for flows without domain (IP-based, typical for attacks like Medusa, MSF)
-                # use a lower threshold to respond quickly
-                if confidence >= 0.90 and packet_count >= 20:
-                    logger.warning(f"[POLICY] Verified anonymous attack: {final_source} (conf={confidence:.3f}, pkts={packet_count}) -> BLOCK")
-                    return {
-                        "action": "BLOCK",
-                        "priority": "NONE",
-                        "reason": f"Anonymous attack (Conf: {confidence:.3f})"
-                    }
-                else:
-                    # not confident enough, but since it's IP-based, give low priority (not block)
-                    # to avoid wasting bandwidth
-                    logger.info(f"[POLICY] Unverified anonymous flow, setting low priority: {final_source}")
-                    # instead of allowing normal QoS, return a low-priority allow
-                    # this bypasses the later QoS scoring to ensure it gets LOW
-                    return {
-                        "action": "ALLOW",
-                        "priority": "LOW",
-                        "score": -5,
-                        "reason": "Unverified Anonymous Flow",
-                        "source_identified": final_source
-                    }
+                    # Low confidence – allow and let QoS handle it (maybe low priority)
+                    logger.info(f"[POLICY] Attack flag ignored for low confidence web traffic: {final_source}")
+                    # fall through to normal QoS
 
-        # 6. QoS Scoring System (if not blocked)
+            # Non‑web ports (including FTP, SSH, etc.)
+            else:
+                # For non‑web, we can be more decisive, but still require high confidence
+                if confidence >= 0.95 and packet_count >= 50:
+                    logger.warning(f"[POLICY] Verified attack on non‑web port {dst_port} -> SOURCE block for {src_ip}")
+                    return self._block("source", f"High-confidence attack (conf={confidence:.2f})", metadata)
+                elif confidence >= 0.80:
+                    logger.warning(f"[POLICY] Moderate confidence attack on {dst_port} -> FLOW block")
+                    return self._block("flow", f"Medium-confidence attack (conf={confidence:.2f})", metadata)
+                else:
+                    # Very low confidence: allow but give low priority
+                    logger.info(f"[POLICY] Attack flag insufficient, allowing as low priority: {final_source}")
+
+        # 4. Additional check: direct IP access to web ports without any domain – treat as suspicious but only flow block
+        if not has_domain and is_web_port and packet_count < 20:
+            # Likely a scan or a simple HTTP request to an IP. Do not block IP, just low priority.
+            logger.info(f"[POLICY] Direct IP web access -> low priority, no IP block: {final_source}")
+            return {
+                "action": "ALLOW",
+                "priority": "LOW",
+                "score": -3,
+                "reason": "Direct IP web access (low confidence)",
+                "source_identified": final_source
+            }
+
+        # 5. Normal QoS scoring
         behaviour = ml_result.get("behaviour", "unknown")
         score = self.compute_score(behaviour, final_academic_status)
         priority = "HIGH" if score >= 8 else ("MEDIUM" if score >= 1 else "LOW")

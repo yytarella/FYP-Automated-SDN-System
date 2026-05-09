@@ -45,15 +45,15 @@ class QoSSystem:
         )
         self.ml_engine = MLEngine()
         self.policy_engine = QoSPolicyEngine()
-        self.traffic_shaper = TrafficShaper(iface="ens37")   # Apply QoS on client-facing interface
+        self.traffic_shaper = TrafficShaper(iface = "ens37",
+                                            log_dir = LOG_DIR)   # Apply QoS on client-facing interface
         self.traffic_shaper.setup()   # Initialize tc and iptables base
 
+  
+    # Inside QoSSystem.process_flow() method
     def process_flow(self, features_cd_dict, features_ab_dict, metadata):
         try:
-            # run inference
             ml_result = self.ml_engine.infer(features_cd_dict, features_ab_dict, metadata)
-
-            # policy decision
             decision = self.policy_engine.decide(
                 ml_result,
                 source=metadata.get("source"),
@@ -61,33 +61,18 @@ class QoSSystem:
             )
 
             if decision["action"] == "BLOCK":
-                # log attack to separate attack log file
-                attack_logger.info(f"BLOCKED {metadata.get('source', 'unknown')} | {decision.get('reason', 'Attack')}")
-                # drop the flow using iptables
-                self.traffic_shaper.block_flow(metadata)
-                # print to main logger 
-                logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')}")
-            
+                # Extract the block granularity (default to 'source' for backward compatibility)
+                block_type = decision.get("block_type", "source")
+                attack_logger.info(f"BLOCKED {metadata.get('source', 'unknown')} | {decision.get('reason', 'Attack')} | mode={block_type}")
+                # Apply block with the selected mode
+                self.traffic_shaper.block_flow(metadata, block_mode=block_type)
+                logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')} | mode={block_type}")
             else:
+                # Normal flow handling (QoS marking)
                 print(f"[REAL-TIME] {metadata.get('source', 'unknown')} -> {decision['priority']} (score={decision['score']})")
-                # log normal flow to main logger
-                logger.info(
-                    f"[FLOW] {metadata.get('source', 'unknown')} | "
-                    f"Behaviour={ml_result.get('behaviour', 'unknown')} | "
-                    f"Academic={ml_result.get('academic', 0)} | "
-                    f"Priority={decision['priority']} | "
-                    f"Score={decision['score']}"
-                )
-
-                # apply QoS shaping for this flow
+                logger.info(...)   # existing logging
                 self.traffic_shaper.mark_flow(metadata, decision["priority"])
                 
-                # user-friendly summary
-                logger.info(
-                    f"Traffic classification: {metadata.get('source', 'unknown')} → priority {decision['priority']}, "
-                    f"behaviour={ml_result.get('behaviour', 'unknown')}, academic={ml_result.get('academic', 0)}"
-                )
-
         except Exception as e:
             logger.error(f"Pipeline error: {e}", exc_info=True)
 
