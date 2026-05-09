@@ -31,11 +31,10 @@ attack_logger.setLevel(logging.INFO)
 attack_handler = logging.FileHandler(f"{LOG_DIR}/attacks.log")
 attack_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
 attack_logger.addHandler(attack_handler)
-attack_logger.propagate = False   # Do not send to root/main logger
+attack_logger.propagate = False
 
 logger = main_logger
 
-# QoS system class
 class QoSSystem:
     def __init__(self):
         self.capture_engine = CaptureEngine(
@@ -45,12 +44,9 @@ class QoSSystem:
         )
         self.ml_engine = MLEngine()
         self.policy_engine = QoSPolicyEngine()
-        self.traffic_shaper = TrafficShaper(iface = "ens37",
-                                            log_dir = LOG_DIR)   # Apply QoS on client-facing interface
-        self.traffic_shaper.setup()   # Initialize tc and iptables base
+        self.traffic_shaper = TrafficShaper(iface="ens37", log_dir=LOG_DIR)
+        self.traffic_shaper.setup()
 
-  
-    # Inside QoSSystem.process_flow() method
     def process_flow(self, features_cd_dict, features_ab_dict, metadata):
         try:
             ml_result = self.ml_engine.infer(features_cd_dict, features_ab_dict, metadata)
@@ -61,32 +57,37 @@ class QoSSystem:
             )
 
             if decision["action"] == "BLOCK":
-                # Extract block_source flag (default True to preserve original behaviour)
-                block_source = decision.get("block_source", True)
+                # Read block_type (either "source" or "flow") from policy
+                block_mode = decision.get("block_type", "source")
                 attack_logger.info(f"BLOCKED {metadata.get('source', 'unknown')} | {decision.get('reason', 'Attack')}")
-                # Pass the flag to traffic_shaper
-                self.traffic_shaper.block_flow(metadata, block_source=block_source)
+                self.traffic_shaper.block_flow(metadata, block_mode=block_mode)
                 logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')}")
-            
             else:
-                # Normal flow handling (QoS marking)
+                # Restore original QoS output format exactly as before
                 print(f"[REAL-TIME] {metadata.get('source', 'unknown')} -> {decision['priority']} (score={decision['score']})")
-                logger.info(...)   # existing logging
+                logger.info(
+                    f"[FLOW] {metadata.get('source', 'unknown')} | "
+                    f"Behaviour={ml_result.get('behaviour', 'unknown')} | "
+                    f"Academic={ml_result.get('academic', 0)} | "
+                    f"Priority={decision['priority']} | "
+                    f"Score={decision['score']}"
+                )
                 self.traffic_shaper.mark_flow(metadata, decision["priority"])
-
+                logger.info(
+                    f"Traffic classification: {metadata.get('source', 'unknown')} → priority {decision['priority']}, "
+                    f"behaviour={ml_result.get('behaviour', 'unknown')}, academic={ml_result.get('academic', 0)}"
+                )
         except Exception as e:
             logger.error(f"Pipeline error: {e}", exc_info=True)
 
     def run(self):
         logger.info("Starting QoS ML System...")
         logger.info(f"Logging session directory: {LOG_DIR}")
-        
         try:
             self.capture_engine.capture(self.process_flow)
-
         except KeyboardInterrupt:
             logger.info("Shutting down QoS System...")
-            self.traffic_shaper.cleanup()   # remove dynamic iptables rules
+            self.traffic_shaper.cleanup()
 
 if __name__ == "__main__":
     system = QoSSystem()

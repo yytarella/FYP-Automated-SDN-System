@@ -25,18 +25,18 @@ class TrafficShaper:
 
     def _setup_htb(self):
         subprocess.run(f"tc qdisc del dev {self.iface} root 2>/dev/null", shell=True)
-        total_rate = 410000   # adjust link speed (kbit)
-        high_rate = 330000 # for HIGH prior
-        medium_rate = 45000 # for MEDIUM prior
-        low_rate = 35000 # for LOW prior
+        total_rate = 410000
+        high_rate = 330000
+        medium_rate = 45000
+        low_rate = 35000
 
         subprocess.run(f"tc qdisc add dev {self.iface} root handle 1: htb default 30", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:10 htb rate {high_rate}kbit ceil {total_rate}kbit prio 0", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:20 htb rate {medium_rate}kbit ceil {total_rate}kbit prio 1", shell=True)
         subprocess.run(f"tc class add dev {self.iface} parent 1: classid 1:30 htb rate {low_rate}kbit ceil {total_rate}kbit prio 2", shell=True)
-        subprocess.run(f"tc qdisc add dev ens37 parent 1:10 handle 10: fq_codel", shell=True)
-        subprocess.run(f"tc qdisc add dev ens37 parent 1:20 handle 20: fq_codel", shell=True)
-        subprocess.run(f"tc qdisc add dev ens37 parent 1:30 handle 30: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:10 handle 10: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:20 handle 20: fq_codel", shell=True)
+        subprocess.run(f"tc qdisc add dev {self.iface} parent 1:30 handle 30: fq_codel", shell=True)
 
     def _setup_filters(self):
         for mark, classid in [(10, "1:10"), (20, "1:20"), (30, "1:30")]:
@@ -56,11 +56,11 @@ class TrafficShaper:
         result = subprocess.run(rule_cmd, shell=True, capture_output=True)
         return result.returncode == 0
 
-    def block_flow(self, metadata, block_source=True):
+    def block_flow(self, metadata, block_mode="source"):
         """
         Block a malicious flow.
-        - block_source=True  : original behaviour: block source IP entirely
-        - block_source=False : drop only the specific flow (dst IP+port), keep source IP free
+        - block_mode = "source" : block source IP entirely (original behaviour)
+        - block_mode = "flow"   : drop only the specific connection (dst IP+port)
         """
         dst_ip = metadata.get("dst_ip")
         dst_port = metadata.get("dst_port")
@@ -71,21 +71,21 @@ class TrafficShaper:
             logger.warning("Missing dst info for block rule")
             return
 
-        # 1. Always add a flow‑specific drop rule (drop packets to dst_ip:dst_port)
+        # 1. Always add a flow-specific drop rule
         flow_rule = f"iptables -I FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP"
         check_flow = f"iptables -C FORWARD -p {proto} -d {dst_ip} --dport {dst_port} -j DROP"
         if not self._rule_exists(check_flow):
             subprocess.run(flow_rule, shell=True)
             logger.info(f"Added flow block rule for {proto} to {dst_ip}:{dst_port}")
 
-        # 2. If block_source is True, also add source IP based rules (original behaviour)
-        if block_source and src_ip:
+        # 2. If block_mode is "source", also block the source IP
+        if block_mode == "source" and src_ip:
             check_ip = f"iptables -C FORWARD -s {src_ip} -j DROP"
             if not self._rule_exists(check_ip):
                 subprocess.run(f"iptables -I FORWARD 1 -s {src_ip} -j DROP", shell=True)
                 subprocess.run(f"iptables -I INPUT 1 -s {src_ip} -j DROP", shell=True)
                 logger.warning(f"[BLOCK-IP] Attacker {src_ip} fully blocked")
-                # Original console output (kept exactly as before)
+                # Original banner for source block
                 print("\n=================ATTACK BLOCKED=================")
                 print(f"Source (Attacker): {src_ip}")
                 print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
@@ -93,15 +93,18 @@ class TrafficShaper:
                 print(f"Logs saved to: {self.log_dir}/attacks.log")
                 print("===================================================\n")
         else:
+            # Flow-only block: print a message that does NOT mislead about source block
+            # (you can keep the original banner if you want, but that would lie about source block)
+            # We use a different banner to clearly indicate only flow dropped.
             print("\n=================FLOW DROPPED=================")
             print(f"Target: {dst_ip}:{dst_port} ({proto.upper()})")
             print("Action: FLOW DROPPED (source IP not blocked)")
             print(f"Logs saved to: {self.log_dir}/attacks.log")
             print("================================================\n")
 
-        # 3. Kill conntrack entries (always do this)
+        # 3. Kill conntrack entries
         conntrack_cmd = f"conntrack -D -p {proto} -d {dst_ip} --dport {dst_port}"
-        if src_ip and block_source:
+        if src_ip and block_mode == "source":
             conntrack_cmd += f" -s {src_ip}"
         subprocess.run(conntrack_cmd, shell=True, stderr=subprocess.DEVNULL)
         logger.info(f"Killed conntrack entries for {proto} to {dst_ip}:{dst_port}")
@@ -117,7 +120,6 @@ class TrafficShaper:
             logger.warning("Missing flow info for QoS marking")
             return
 
-        # Mark the connection
         check_mark = (f"iptables -t mangle -C {self.chain} -p {proto} -s {src_ip} -d {dst_ip} "
                       f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
         if not self._rule_exists(check_mark):
@@ -125,7 +127,6 @@ class TrafficShaper:
                          f"--sport {src_port} --dport {dst_port} -j CONNMARK --set-mark {mark_value}")
             subprocess.run(mark_rule, shell=True)
 
-        # Restore mark to each packet
         restore_rule = (f"iptables -t mangle -A {self.chain} -m connmark --mark {mark_value} "
                         f"-j CONNMARK --restore-mark")
         check_restore = (f"iptables -t mangle -C {self.chain} -m connmark --mark {mark_value} "
