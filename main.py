@@ -64,7 +64,12 @@ class QoSSystem:
                 logger.warning(f"[BLOCKED] {metadata.get('source', 'unknown')} | Reason: {decision.get('reason', 'Attack')}")
             else:
                 # Restore original QoS output format exactly as before
-                print(f"[REAL-TIME] {metadata.get('source', 'unknown')} -> {decision['priority']} (score={decision['score']})")
+                print(
+                    f"[REAL-TIME] {metadata.get('source', 'unknown')} "
+                    f"-> {decision['priority']} "
+                    f"(score={decision['score']}, "
+                    f"confidence={ml_result.get('confidence',0):.2f})"
+                )
                 logger.info(
                     f"[FLOW] {metadata.get('source', 'unknown')} | "
                     f"Behaviour={ml_result.get('behaviour', 'unknown')} | "
